@@ -76,6 +76,7 @@ function Resolve-Governance {
     #>
     [CmdletBinding()]
     param(
+        [Parameter(Mandatory)][object]$Manifest,
         [Parameter(Mandatory)][object]$Source,
         [Parameter(Mandatory)][object]$Access,
         [Parameter(Mandatory)][string]$SourceHash,
@@ -90,7 +91,7 @@ function Resolve-Governance {
         Owned           = @{}
     }
 
-    $program = $Source.program
+    $program = $Manifest.program
     $root    = "\$program"
 
     $ctx.AreaPaths.Add([ordered]@{ path = $root; kind = 'portfolio' })
@@ -213,6 +214,7 @@ function Resolve-Governance {
 
     $resolved = [ordered]@{
         program         = $program
+        org             = $Manifest.org
         generated       = (Get-Date).ToUniversalTime().ToString('o')
         sourceHash      = "sha256:$SourceHash"
         areaPaths       = $ctx.AreaPaths

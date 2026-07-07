@@ -10,15 +10,19 @@ function Import-GovernanceSource {
         [Parameter(Mandatory)][string]$ProgramPath
     )
 
+    $manifestPath  = Join-Path $ProgramPath 'manifest.yaml'
     $hierarchyPath = Join-Path $ProgramPath 'hierarchy.yaml'
     $accessPath    = Join-Path $ProgramPath 'access.yaml'
 
+    if (-not (Test-Path $manifestPath))  { throw "Manifest file not found: $manifestPath" }
     if (-not (Test-Path $hierarchyPath)) { throw "Hierarchy file not found: $hierarchyPath" }
     if (-not (Test-Path $accessPath))    { throw "Access file not found: $accessPath" }
 
+    $manifestRaw  = Get-Content -Path $manifestPath -Raw
     $hierarchyRaw = Get-Content -Path $hierarchyPath -Raw
     $accessRaw    = Get-Content -Path $accessPath -Raw
 
+    $manifest  = ConvertFrom-Yaml $manifestRaw
     $hierarchy = ConvertFrom-Yaml $hierarchyRaw
     $access    = ConvertFrom-Yaml $accessRaw
 
@@ -34,11 +38,12 @@ function Import-GovernanceSource {
         }
     }
 
-    $bytes  = [System.Text.Encoding]::UTF8.GetBytes($hierarchyRaw + $accessRaw + $membersRaw)
+    $bytes  = [System.Text.Encoding]::UTF8.GetBytes($manifestRaw + $hierarchyRaw + $accessRaw + $membersRaw)
     $stream = [System.IO.MemoryStream]::new($bytes)
     $hash   = (Get-FileHash -InputStream $stream -Algorithm SHA256).Hash.ToLowerInvariant()
 
     return @{
+        Manifest  = $manifest
         Hierarchy = $hierarchy
         Access    = $access
         Members   = $members

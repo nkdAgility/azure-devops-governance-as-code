@@ -12,7 +12,7 @@ function Invoke-GovernanceBuild {
 
     $program  = Split-Path $ProgramPath -Leaf
     $source   = Import-GovernanceSource -ProgramPath $ProgramPath
-    $resolved = Resolve-Governance -Source $source.Hierarchy -Access $source.Access -Members $source.Members -SourceHash $source.Hash
+    $resolved = Resolve-Governance -Manifest $source.Manifest -Source $source.Hierarchy -Access $source.Access -Members $source.Members -SourceHash $source.Hash
 
     $issues = Test-ResolvedGovernance -Resolved $resolved
     if ($issues.Count -gt 0) {

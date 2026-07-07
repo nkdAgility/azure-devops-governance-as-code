@@ -6,13 +6,19 @@ function Invoke-GovernancePlan {
     #>
     [CmdletBinding()]
     param(
+        [Parameter(Mandatory)][string]$ProgramPath,
         [Parameter(Mandatory)][string]$ResolvedPath,
-        [Parameter(Mandatory)][string]$Org
+        [string]$Org
     )
 
     if (-not (Test-Path $ResolvedPath)) {
         throw "No resolved file at $ResolvedPath. Run 'build.ps1 build' first."
     }
 
-    Write-Warning "plan: not yet implemented. Would diff '$ResolvedPath' against org '$Org'."
+    $manifest   = (Import-GovernanceSource -ProgramPath $ProgramPath).Manifest
+    $targetOrg  = if ($Org) { $Org } else { $manifest.org }
+    $token      = Resolve-AccessToken $manifest.accessToken
+    $tokenState = if ($token) { 'present' } else { 'MISSING' }
+
+    Write-Warning "plan: not yet implemented. Would diff '$ResolvedPath' against org '$targetOrg' (token: $tokenState)."
 }

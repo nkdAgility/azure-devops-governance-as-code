@@ -20,3 +20,23 @@ function Test-AdoCli {
         throw "Azure CLI ('az') not found. Install it and the 'azure-devops' extension to use plan/apply/audit."
     }
 }
+
+function Resolve-AccessToken {
+    <#
+        .SYNOPSIS
+        Resolves an accessToken reference from hierarchy.yaml into an actual PAT.
+        A reference of the form '$Env:NAME' or '${Env:NAME}' reads the named
+        environment variable; any other value is treated as a literal token.
+        Returns $null when unset. The token is never written to the resolved file.
+    #>
+    [CmdletBinding()]
+    param([AllowNull()][AllowEmptyString()][string]$Reference)
+
+    if ([string]::IsNullOrWhiteSpace($Reference)) { return $null }
+    $ref = $Reference.Trim()
+
+    if ($ref -match '^\$\{Env:(.+)\}$' -or $ref -match '^\$Env:(.+)$') {
+        return [Environment]::GetEnvironmentVariable($Matches[1])
+    }
+    return $ref
+}

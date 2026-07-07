@@ -6,13 +6,19 @@ function Invoke-GovernanceAudit {
     #>
     [CmdletBinding()]
     param(
+        [Parameter(Mandatory)][string]$ProgramPath,
         [Parameter(Mandatory)][string]$ResolvedPath,
-        [Parameter(Mandatory)][string]$Org
+        [string]$Org
     )
 
     if (-not (Test-Path $ResolvedPath)) {
         throw "No resolved file at $ResolvedPath. Run 'build.ps1 build' first."
     }
 
-    Write-Warning "audit: not yet implemented. Would audit org '$Org' against '$ResolvedPath'."
+    $manifest   = (Import-GovernanceSource -ProgramPath $ProgramPath).Manifest
+    $targetOrg  = if ($Org) { $Org } else { $manifest.org }
+    $token      = Resolve-AccessToken $manifest.accessToken
+    $tokenState = if ($token) { 'present' } else { 'MISSING' }
+
+    Write-Warning "audit: not yet implemented. Would audit org '$targetOrg' against '$ResolvedPath' (token: $tokenState)."
 }

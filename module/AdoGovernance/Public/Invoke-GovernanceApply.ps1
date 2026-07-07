@@ -6,13 +6,19 @@ function Invoke-GovernanceApply {
     #>
     [CmdletBinding(SupportsShouldProcess, ConfirmImpact = 'High')]
     param(
+        [Parameter(Mandatory)][string]$ProgramPath,
         [Parameter(Mandatory)][string]$ResolvedPath,
-        [Parameter(Mandatory)][string]$Org
+        [string]$Org
     )
 
     if (-not (Test-Path $ResolvedPath)) {
         throw "No resolved file at $ResolvedPath. Run 'build.ps1 build' first."
     }
 
-    Write-Warning "apply: not yet implemented. Would reconcile org '$Org' to '$ResolvedPath'."
+    $manifest   = (Import-GovernanceSource -ProgramPath $ProgramPath).Manifest
+    $targetOrg  = if ($Org) { $Org } else { $manifest.org }
+    $token      = Resolve-AccessToken $manifest.accessToken
+    $tokenState = if ($token) { 'present' } else { 'MISSING' }
+
+    Write-Warning "apply: not yet implemented. Would reconcile org '$targetOrg' to '$ResolvedPath' (token: $tokenState)."
 }
