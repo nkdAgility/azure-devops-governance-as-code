@@ -31,13 +31,44 @@
 param(
     [Parameter(Position = 0)]
     [ValidateSet('build', 'validate', 'plan', 'apply', 'audit')]
-    [string]$Command = 'build',
+    [string]$Command,
 
     [string]$Program,
-    [string]$Org
+    [string]$Org,
+    [switch]$WhatIf
 )
 
 $ErrorActionPreference = 'Stop'
+
+# No command -> print help and exit (before any bootstrapping).
+if (-not $Command) {
+    Write-Host @'
+build.ps1 - Azure DevOps governance-as-code
+
+Usage:
+  ./build.ps1 <command> [-Program <name>] [-Org <org>]
+
+Commands:
+  build     Compile programs/<name> -> out/<name>/resolved.yaml (+ validate)
+  validate  Schema + rules + Azure DevOps limits (no live calls)
+  plan      Diff resolved desired state vs live Azure DevOps
+  apply     Reconcile Azure DevOps to the resolved desired state
+  audit     Read-only compliance report
+
+Options:
+  -Program  Target one program under programs/ (default: all programs)
+  -Org      Override the org declared in the program manifest.yaml
+  -WhatIf   (apply) Show what would change without making any changes
+
+Examples:
+  ./build.ps1 build
+  ./build.ps1 build    -Program odyssey
+  ./build.ps1 validate -Program odyssey
+  ./build.ps1 plan     -Program odyssey
+  ./build.ps1 apply    -Program odyssey -WhatIf
+'@
+    return
+}
 
 $moduleManifest = Join-Path $PSScriptRoot 'module/AdoGovernance/AdoGovernance.psd1'
 $programsRoot   = Join-Path $PSScriptRoot 'programs'
@@ -74,7 +105,7 @@ foreach ($programPath in $programPaths) {
         'build'    { Invoke-GovernanceBuild -ProgramPath $programPath -OutputPath $resolvedPath }
         'validate' { Test-Governance        -ProgramPath $programPath }
         'plan'     { Invoke-GovernancePlan   -ProgramPath $programPath -ResolvedPath $resolvedPath -Org $Org }
-        'apply'    { Invoke-GovernanceApply  -ProgramPath $programPath -ResolvedPath $resolvedPath -Org $Org }
+        'apply'    { Invoke-GovernanceApply  -ProgramPath $programPath -ResolvedPath $resolvedPath -Org $Org -WhatIf:$WhatIf }
         'audit'    { Invoke-GovernanceAudit  -ProgramPath $programPath -ResolvedPath $resolvedPath -Org $Org }
     }
 }

@@ -40,10 +40,11 @@ function Test-ResolvedGovernance {
     $issues = [System.Collections.Generic.List[string]]::new()
     $forbidden = '[\\/:*?"<>|#$&+]'
 
-    # Unique short codes (the global ownership keys).
-    $shorts = @($Resolved.areaPaths | Where-Object { $_.short } | ForEach-Object { $_.short })
-    $dupes  = $shorts | Group-Object | Where-Object Count -gt 1
-    foreach ($d in $dupes) { $issues.Add("Duplicate short code '$($d.Name)' used $($d.Count) times") }
+    # Unique code chains (the global ownership keys, e.g. PTL-FND). Leaf shorts may
+    # repeat across products; the product-qualified code must be unique.
+    $codes = @($Resolved.areaPaths | Where-Object { $_.code } | ForEach-Object { $_.code })
+    $dupes = $codes | Group-Object | Where-Object Count -gt 1
+    foreach ($d in $dupes) { $issues.Add("Duplicate code '$($d.Name)' used $($d.Count) times") }
 
     foreach ($area in $Resolved.areaPaths) {
         $segments = $area.path.TrimStart('\') -split '\\'

@@ -16,10 +16,10 @@ function Test-Governance {
 
     $issues = Test-ResolvedGovernance -Resolved $resolved
 
-    # Owner references must resolve to a real team short.
-    $teamShorts = @($resolved.teams | Where-Object { $_.short } | ForEach-Object { $_.short })
+    # Owner references must resolve to a real team's product-qualified code (e.g. PTL-FND).
+    $teamKeys = @($resolved.teams | Where-Object { $_.codePath } | ForEach-Object { $_.codePath })
     foreach ($area in $resolved.areaPaths) {
-        if ($area.owner -and $area.owner -notin $teamShorts) {
+        if ($area.owner -and $area.owner -notin $teamKeys) {
             $issues += "Owner '$($area.owner)' on '$($area.path)' does not resolve to a team"
         }
     }

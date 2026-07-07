@@ -9,18 +9,19 @@ $script:BandDisplayName = @{
 }
 
 function Add-OwnedEntry {
-    <# Records that a node's area path is managed by another team (owner back-reference). #>
+    <# Records that a node's area path is managed by another team (owner back-reference).
+       Keyed by the owner's product-qualified code (e.g. PTL-FND), not the bare leaf. #>
     [CmdletBinding()]
     param(
         [Parameter(Mandatory)][hashtable]$Ctx,
-        [Parameter(Mandatory)][string]$Short,
+        [Parameter(Mandatory)][string]$Key,
         [Parameter(Mandatory)][string]$Path,
         [bool]$IncludeSubAreas
     )
-    if (-not $Ctx.Owned.ContainsKey($Short)) {
-        $Ctx.Owned[$Short] = [System.Collections.Generic.List[object]]::new()
+    if (-not $Ctx.Owned.ContainsKey($Key)) {
+        $Ctx.Owned[$Key] = [System.Collections.Generic.List[object]]::new()
     }
-    $Ctx.Owned[$Short].Add([ordered]@{ path = $Path; includeSubAreas = [bool]$IncludeSubAreas })
+    $Ctx.Owned[$Key].Add([ordered]@{ path = $Path; includeSubAreas = [bool]$IncludeSubAreas })
 }
 
 function Add-TeamNode {
@@ -43,11 +44,11 @@ function Add-TeamNode {
     $hasChildren = $children.Count -gt 0
 
     $area = [ordered]@{ path = $path; kind = 'team' }
-    if ($Node.short) { $area.short = $Node.short }
+    if ($Node.short) { $area.short = $Node.short; $area.code = $codePath }
     $Ctx.AreaPaths.Add($area)
 
     if ($Node.owner) {
-        Add-OwnedEntry -Ctx $Ctx -Short $Node.owner -Path $path -IncludeSubAreas $true
+        Add-OwnedEntry -Ctx $Ctx -Key $Node.owner -Path $path -IncludeSubAreas $true
     }
     else {
         $folder = if ($IsFirstLevel) { $path.Substring($ProgramRoot.Length) } else { $null }
@@ -110,13 +111,13 @@ function Resolve-Governance {
         $productPath = "$root\$($product.name)"
 
         $area = [ordered]@{ path = $productPath; kind = 'product' }
-        if ($product.short) { $area.short = $product.short }
+        if ($product.short) { $area.short = $product.short; $area.code = $product.short }
         if ($null -ne $product.dpm) { $area.dpm = $product.dpm }
         if ($product.scope) { $area.scope = $product.scope }
         $ctx.AreaPaths.Add($area)
 
         if ($product.owner) {
-            Add-OwnedEntry -Ctx $ctx -Short $product.owner -Path $productPath -IncludeSubAreas $true
+            Add-OwnedEntry -Ctx $ctx -Key $product.owner -Path $productPath -IncludeSubAreas $true
         }
         else {
             $ctx.Teams.Add([ordered]@{
@@ -146,7 +147,7 @@ function Resolve-Governance {
                     $pluginPath = "$bandPath\$($plugin.name)"
 
                     $pArea = [ordered]@{ path = $pluginPath; kind = 'entity' }
-                    if ($plugin.short) { $pArea.short = $plugin.short }
+                    if ($plugin.short) { $pArea.short = $plugin.short; $pArea.code = "$($product.short)-$($plugin.short)" }
                     if ($plugin.owner) { $pArea.owner = $plugin.owner }
                     $ctx.AreaPaths.Add($pArea)
 
@@ -154,7 +155,7 @@ function Resolve-Governance {
                     $ctx.Repos.Add([ordered]@{ name = $repoName; areaPath = $pluginPath; owner = $plugin.owner })
 
                     if ($plugin.owner) {
-                        Add-OwnedEntry -Ctx $ctx -Short $plugin.owner -Path $pluginPath -IncludeSubAreas $false
+                        Add-OwnedEntry -Ctx $ctx -Key $plugin.owner -Path $pluginPath -IncludeSubAreas $false
                     }
                 }
             }
@@ -170,8 +171,8 @@ function Resolve-Governance {
     foreach ($team in $ctx.Teams) {
         $areaConfig = [System.Collections.Generic.List[object]]::new()
         $areaConfig.Add([ordered]@{ path = $team.defaultAreaPath; includeSubAreas = $team.includeSubAreas })
-        if ($team.short -and $ctx.Owned.ContainsKey($team.short)) {
-            foreach ($entry in $ctx.Owned[$team.short]) { $areaConfig.Add($entry) }
+        if ($team.codePath -and $ctx.Owned.ContainsKey($team.codePath)) {
+            foreach ($entry in $ctx.Owned[$team.codePath]) { $areaConfig.Add($entry) }
         }
         $team.areaConfig = $areaConfig
 
