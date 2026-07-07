@@ -1,0 +1,34 @@
+function Test-Governance {
+    <#
+        .SYNOPSIS
+        Validates the authored governance source — schema, unique short codes,
+        resolvable owner references, and Azure DevOps area-path limits — without
+        writing the resolved file or making any live calls.
+    #>
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)][string]$ProgramPath
+    )
+
+    $program  = Split-Path $ProgramPath -Leaf
+    $source   = Import-GovernanceSource -ProgramPath $ProgramPath
+    $resolved = Resolve-Governance -Source $source.Hierarchy -Access $source.Access -Members $source.Members -SourceHash $source.Hash
+
+    $issues = Test-ResolvedGovernance -Resolved $resolved
+
+    # Owner references must resolve to a real team short.
+    $teamShorts = @($resolved.teams | Where-Object { $_.short } | ForEach-Object { $_.short })
+    foreach ($area in $resolved.areaPaths) {
+        if ($area.owner -and $area.owner -notin $teamShorts) {
+            $issues += "Owner '$($area.owner)' on '$($area.path)' does not resolve to a team"
+        }
+    }
+
+    if ($issues.Count -gt 0) {
+        $issues | ForEach-Object { Write-Error $_ }
+        throw "Governance validation failed for '$program' with $($issues.Count) issue(s)."
+    }
+
+    Write-Host "Governance '$program' is valid." -ForegroundColor Green
+    return $true
+}
