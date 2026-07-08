@@ -74,7 +74,7 @@ function Invoke-GovernanceReconcile {
     Write-Host "`n--- Teams ---" -ForegroundColor Cyan
 
     $liveTeamNames = [System.Collections.Generic.HashSet[string]]::new(
-        (Get-AdoTeamList -OrgUrl $OrgUrl -Project $project),
+        [string[]]@(Get-AdoTeamList -OrgUrl $OrgUrl -Project $project),
         [System.StringComparer]::OrdinalIgnoreCase)
 
     $desiredTeams = @($Resolved.teams | Where-Object {
@@ -141,7 +141,7 @@ function Invoke-GovernanceReconcile {
 
     # Orphan teams — exist in ADO but absent from the resolved model
     $desiredTeamNameSet = [System.Collections.Generic.HashSet[string]]::new(
-        (@($desiredTeams | ForEach-Object { $_.name }) + @($project)),
+        [string[]]@(@($desiredTeams | ForEach-Object { $_.name }) + @($project)),
         [System.StringComparer]::OrdinalIgnoreCase)
     foreach ($liveName in ($liveTeamNames | Sort-Object)) {
         if (-not $desiredTeamNameSet.Contains($liveName)) {

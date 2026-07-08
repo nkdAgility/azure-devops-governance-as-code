@@ -342,9 +342,12 @@ function Get-AdoAreaPathSubtree {
     <#
         .SYNOPSIS
         Returns a hashtable of every area path in the governance-owned project tree.
-        Uses a targeted REST call scoped to the project, not the entire org, so
-        the response is bounded by the project's own area nodes.
-        Paths are in the same format as the resolved model: '\Project\Node\...'.
+        Uses a targeted REST call scoped to the project (bounded response, no OOM).
+        Paths match the resolved model format: '\Project\Node\...'.
+
+        The REST root node for the area tree may have an empty or platform-specific
+        name, so we inject '\Project' directly as the root anchor rather than
+        trusting the root node's 'name' property.
     #>
     [CmdletBinding()]
     param(
@@ -353,17 +356,21 @@ function Get-AdoAreaPathSubtree {
         [int]$Depth = 10
     )
     $set  = @{}
+    $root = "\$Project"
+    $set[$root] = $true
+
     $data = Invoke-AdoRest -OrgUrl $OrgUrl `
         -Path "$Project/_apis/wit/classificationnodes/areas?`$depth=$Depth"
 
+    # Walk children only — the root node itself is anchored as \Project above.
     $stack = [System.Collections.Generic.Stack[object]]::new()
-    $stack.Push([pscustomobject]@{ node = $data; prefix = '' })
+    $stack.Push([pscustomobject]@{ node = $data; prefix = $root })
     while ($stack.Count) {
         $item = $stack.Pop()
-        $path = "$($item.prefix)\$($item.node.name)"
-        $set[$path] = $true
         foreach ($child in @($item.node.children)) {
-            if ($null -ne $child) {
+            if ($null -ne $child -and $child.name) {
+                $path = "$($item.prefix)\$($child.name)"
+                $set[$path] = $true
                 $stack.Push([pscustomobject]@{ node = $child; prefix = $path })
             }
         }
