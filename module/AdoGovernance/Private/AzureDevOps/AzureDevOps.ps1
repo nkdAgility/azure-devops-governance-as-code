@@ -42,9 +42,12 @@ function Resolve-AccessToken {
 }
 
 function Set-AdoAuth {
-    <# Makes the PAT available to the az CLI via its standard env var. #>
+    <# Validates and stores the PAT. Throws if the value looks like a URL (common misconfiguration). #>
     [CmdletBinding()]
     param([Parameter(Mandatory)][string]$Token)
+    if ($Token -match '^https?://') {
+        throw "accessToken resolved to a URL ('$Token'). The manifest.yaml accessToken should reference the env var holding the PAT, not the org URL. Check the AZDEVOPS_DEV_PAT / AZDEVOPS_DEV_ORG naming in your manifest."
+    }
     $env:AZURE_DEVOPS_EXT_PAT = $Token
 }
 
@@ -88,9 +91,9 @@ function Test-AdoAreaPath {
             -Path "$Project/_apis/wit/classificationnodes/areas/$apiSubPath" | Out-Null
         return $true
     } catch {
-        # Only treat a genuine 404 as 'not found' — re-throw anything else (auth failure, HTML
-        # response, network error) so the caller sees the real problem.
-        if ($_ -match '404|Not Found') { return $false }
+        # ADO returns either HTTP 404 or a WorkItemTrackingTreeNodeNotFoundException
+        # (message: "The Area/Iteration name is not recognized") for a missing node.
+        if ($_ -match '404|Not Found|is not recognized|TreeNodeNotFoundException') { return $false }
         throw
     }
 }

@@ -1,20 +1,21 @@
 function Invoke-GovernanceReconcile {
     <#
         .SYNOPSIS
-        Unified compliance loop. For every governed resource it:
-          1. Checks the live ADO state against the resolved desired state
-          2. Reports every deviation (MISSING, DRIFT, ORPHAN)
-          3. In Apply mode: corrects the deviation immediately after reporting it
+        Unified compliance loop. For every governed resource it checks live ADO
+        state against the resolved desired state.
 
-        This is the engine behind both 'audit' and 'apply'. There is no apply
-        without audit — the check always runs first.
+        In Apply mode: deviations are corrected immediately. A finding is only
+        recorded when a fix FAILS. Successfully applied changes are NOT findings.
+
+        In Audit / WhatIf mode: every deviation is recorded as a finding and
+        reported. No changes are made.
 
         Mode:
-          Audit  — check + report only. Read-only, no changes made.
-          Apply  — check + report + fix. Corrects drift and creates missing.
-          WhatIf — check + report what would be fixed. No changes made.
+          Audit  - check + report only. Read-only. Findings signal CI failure.
+          Apply  - check + fix. Findings = things that could not be fixed.
+          WhatIf - check + report what would be fixed. No changes made.
 
-        Returns an array of finding strings. Empty = fully compliant.
+        Returns a string array of remaining findings. Empty = fully compliant.
     #>
     [CmdletBinding()]
     param(
@@ -29,14 +30,14 @@ function Invoke-GovernanceReconcile {
     $project  = $Resolved.program
     $doFix    = ($Mode -eq 'Apply')
 
-    # ── output helpers (scriptblocks to avoid polluting module scope) ─────────
+    # output helpers
     $rOk      = { param($m) Write-Host "  [ok]      $m" -ForegroundColor Green }
     $rCreated = { param($m) Write-Host "  [+]       $m  [created]" -ForegroundColor Yellow }
     $rFixed   = { param($m) Write-Host "  [~]       $m  [corrected]" -ForegroundColor Yellow }
     $rWould   = { param($m) Write-Host "  [NON-COMPLIANT] $m  (dry-run: no changes made)" -ForegroundColor Cyan }
     $rMissing = { param($m) Write-Host "  [MISSING] $m" -ForegroundColor Red }
     $rDrift   = { param($m) Write-Host "  [DRIFT]   $m" -ForegroundColor Red }
-    $rOrphan  = { param($m) Write-Host "  [AUDIT EXCEPTION] $m  (exists in ADO but not in config — remove or add to config)" -ForegroundColor Magenta }
+    $rOrphan  = { param($m) Write-Host "  [AUDIT EXCEPTION] $m  (exists in ADO but not in config)" -ForegroundColor Magenta }
     $rError   = { param($m) Write-Host "  [ERROR]   $m" -ForegroundColor Red }
 
     # ── 1. Area paths ─────────────────────────────────────────────────────────
@@ -44,10 +45,8 @@ function Invoke-GovernanceReconcile {
 
     $desiredAreas = @($Resolved.areaPaths | Where-Object { $_.scope -ne 'future' })
     $desiredPaths = @($desiredAreas | ForEach-Object { $_.path }) |
-                    Sort-Object { ($_ -split '\\').Count }   # parents before children
+                    Sort-Object { ($_ -split '\\').Count }
 
-    # Check each desired path individually — the bulk tree API ($depth) does not
-    # reliably return children, so per-path REST calls are used for MISSING detection.
     $liveAreas = @{}
     foreach ($path in $desiredPaths) {
         $exists = Test-AdoAreaPath -OrgUrl $OrgUrl -Project $project -ResolvedPath $path
@@ -55,22 +54,27 @@ function Invoke-GovernanceReconcile {
             $liveAreas[$path] = $true
             & $rOk $path
         } else {
-            $findings.Add("MISSING area path: $path")
             if ($doFix) {
                 try {
                     New-AdoAreaPath -OrgUrl $OrgUrl -Project $project -ResolvedPath $path
                     & $rCreated "area path: $path"
                     $liveAreas[$path] = $true
-                } catch { & $rError "create area path '$path': $_" }
-            } elseif ($Mode -eq 'WhatIf') { & $rWould "create area path: $path"
-            } else                         { & $rMissing "area path: $path" }
+                } catch {
+                    $findings.Add("ERROR creating area path '$path': $_")
+                    & $rError "create area path '$path': $_"
+                }
+            } else {
+                $findings.Add("MISSING area path: $path")
+                if ($Mode -eq 'WhatIf') { & $rWould "create area path: $path" }
+                else                     { & $rMissing "area path: $path" }
+            }
         }
     }
 
-    # Audit exceptions — use bulk tree fetch (best-effort; skipped if API returns no children)
+    # Audit exceptions: best-effort bulk fetch for extra paths
     try {
         $bulkAreas = Get-AdoAreaPathSubtree -OrgUrl $OrgUrl -Project $project
-        if ($bulkAreas.Count -gt 1) {   # more than just the root — bulk fetch worked
+        if ($bulkAreas.Count -gt 1) {
             foreach ($livePath in ($bulkAreas.Keys | Sort-Object)) {
                 if ($livePath -notin $desiredPaths) {
                     $findings.Add("AUDIT EXCEPTION area path: $livePath")
@@ -94,62 +98,69 @@ function Invoke-GovernanceReconcile {
         $exists = $liveTeamNames.Contains($team.name)
 
         if (-not $exists) {
-            $findings.Add("MISSING team: $($team.name)")
             if ($doFix) {
                 try {
                     New-AdoTeam -OrgUrl $OrgUrl -Project $project -Name $team.name
                     & $rCreated "team: $($team.name)"
                     $liveTeamNames.Add($team.name) | Out-Null
                     $exists = $true
-                } catch { & $rError "create team '$($team.name)': $_" }
-            } elseif ($Mode -eq 'WhatIf') { & $rWould "create team: $($team.name)"
-            } else                         { & $rMissing "team: $($team.name)" }
+                } catch {
+                    $findings.Add("ERROR creating team '$($team.name)': $_")
+                    & $rError "create team '$($team.name)': $_"
+                }
+            } else {
+                $findings.Add("MISSING team: $($team.name)")
+                if ($Mode -eq 'WhatIf') { & $rWould "create team: $($team.name)" }
+                else                     { & $rMissing "team: $($team.name)" }
+            }
         }
 
-        # Area config check — runs whether team existed or was just created
         if ($exists) {
             try {
-                $liveConfig  = Get-AdoTeamAreaConfig -OrgUrl $OrgUrl -Project $project -Team $team.name
-                $liveSet     = @{}
+                $liveConfig = Get-AdoTeamAreaConfig -OrgUrl $OrgUrl -Project $project -Team $team.name
+                $liveSet    = @{}
                 foreach ($v in @($liveConfig.values)) {
                     $liveSet["\$($v.value)"] = [bool]$v.includeChildren
                 }
 
-                $desired  = @($team.areaConfig | Where-Object { $_ })
-                $configOk = $true
+                $desired      = @($team.areaConfig | Where-Object { $_ })
+                $driftDetails = [System.Collections.Generic.List[string]]::new()
 
                 foreach ($entry in $desired) {
                     if (-not $liveSet.ContainsKey($entry.path)) {
-                        $findings.Add("DRIFT team '$($team.name)': area path '$($entry.path)' not configured")
-                        $configOk = $false
+                        $driftDetails.Add("DRIFT team '$($team.name)': area path '$($entry.path)' not configured")
                     } elseif ($liveSet[$entry.path] -ne [bool]$entry.includeSubAreas) {
-                        $findings.Add("DRIFT team '$($team.name)': '$($entry.path)' includeSubAreas should be $($entry.includeSubAreas) but is $($liveSet[$entry.path])")
-                        $configOk = $false
+                        $driftDetails.Add("DRIFT team '$($team.name)': '$($entry.path)' includeSubAreas should be $($entry.includeSubAreas) but is $($liveSet[$entry.path])")
                     }
                 }
                 foreach ($livePath in $liveSet.Keys) {
                     if ($livePath -notin ($desired | ForEach-Object { $_.path })) {
-                        $findings.Add("DRIFT team '$($team.name)': unexpected area path '$livePath' in config")
-                        $configOk = $false
+                        $driftDetails.Add("DRIFT team '$($team.name)': unexpected area path '$livePath' in config")
                     }
                 }
 
-                if ($configOk) {
+                if ($driftDetails.Count -eq 0) {
                     & $rOk "team: $($team.name)  (area config)"
                 } else {
                     if ($doFix) {
                         try {
                             Set-AdoTeamAreaConfig -OrgUrl $OrgUrl -Project $project -Team $team.name -AreaConfig $desired
                             & $rFixed "team: $($team.name)  area config"
-                        } catch { & $rError "set area config '$($team.name)': $_" }
-                    } elseif ($Mode -eq 'WhatIf') { & $rWould "correct area config for team: $($team.name)"
-                    } else                         { & $rDrift "team: $($team.name)  area config wrong" }
+                        } catch {
+                            foreach ($d in $driftDetails) { $findings.Add($d) }
+                            $findings.Add("ERROR setting area config '$($team.name)': $_")
+                            & $rError "set area config '$($team.name)': $_"
+                        }
+                    } else {
+                        foreach ($d in $driftDetails) { $findings.Add($d) }
+                        if ($Mode -eq 'WhatIf') { & $rWould "correct area config for team: $($team.name)" }
+                        else                     { & $rDrift "team: $($team.name)  area config wrong" }
+                    }
                 }
             } catch { & $rError "read area config '$($team.name)': $_" }
         }
     }
 
-    # Orphan teams — exist in ADO but absent from the resolved model
     $desiredTeamNameSet = [System.Collections.Generic.HashSet[string]]::new(
         [string[]]@(@($desiredTeams | ForEach-Object { $_.name }) + @($project)),
         [System.StringComparer]::OrdinalIgnoreCase)
@@ -172,20 +183,25 @@ function Invoke-GovernanceReconcile {
 
             $groupExists = $liveGroups.ContainsKey($grp.ado)
             if (-not $groupExists) {
-                $findings.Add("MISSING group: $($grp.ado)")
                 if ($doFix) {
                     try {
                         $liveGroups[$grp.ado] = New-AdoGroup -OrgUrl $OrgUrl -Project $project -Name $grp.ado
                         & $rCreated "group: $($grp.ado)"
                         $groupExists = $true
-                    } catch { & $rError "create group '$($grp.ado)': $_"; continue }
-                } elseif ($Mode -eq 'WhatIf') { & $rWould "create group: $($grp.ado)"; continue
-                } else                         { & $rMissing "group: $($grp.ado)"; continue }
+                    } catch {
+                        $findings.Add("ERROR creating group '$($grp.ado)': $_")
+                        & $rError "create group '$($grp.ado)': $_"
+                        continue
+                    }
+                } else {
+                    $findings.Add("MISSING group: $($grp.ado)")
+                    if ($Mode -eq 'WhatIf') { & $rWould "create group: $($grp.ado)"; continue }
+                    else                     { & $rMissing "group: $($grp.ado)"; continue }
+                }
             } else {
                 & $rOk "group: $($grp.ado)"
             }
 
-            # Membership check (email-based users only; Entra groups deferred)
             if (-not $groupExists) { continue }
             $members = @($grp.members | Where-Object { $_ -match '@' })
             if ($members.Count -eq 0) { continue }
@@ -203,14 +219,19 @@ function Invoke-GovernanceReconcile {
                         continue
                     }
                     if (-not $liveMembers.ContainsKey($mDesc)) {
-                        $findings.Add("MISSING member '$m' in '$($grp.ado)'")
                         if ($doFix) {
                             try {
                                 Add-AdoGroupMember -OrgUrl $OrgUrl -MemberDescriptor $mDesc -ContainerDescriptor $descriptor
-                                & $rCreated "member: $m → $($grp.ado)"
-                            } catch { & $rError "add member '$m' to '$($grp.ado)': $_" }
-                        } elseif ($Mode -eq 'WhatIf') { & $rWould "add member: $m → $($grp.ado)"
-                        } else                         { & $rMissing "member: $m in $($grp.ado)" }
+                                & $rCreated "member: $m -> $($grp.ado)"
+                            } catch {
+                                $findings.Add("ERROR adding member '$m' to '$($grp.ado)': $_")
+                                & $rError "add member '$m' to '$($grp.ado)': $_"
+                            }
+                        } else {
+                            $findings.Add("MISSING member '$m' in '$($grp.ado)'")
+                            if ($Mode -eq 'WhatIf') { & $rWould "add member: $m -> $($grp.ado)" }
+                            else                     { & $rMissing "member: $m in $($grp.ado)" }
+                        }
                     }
                 }
             } catch { & $rError "read members of '$($grp.ado)': $_" }
@@ -225,14 +246,19 @@ function Invoke-GovernanceReconcile {
         if ($liveRepos.ContainsKey($repo.name)) {
             & $rOk "repo: $($repo.name)"
         } else {
-            $findings.Add("MISSING repo: $($repo.name)")
             if ($doFix) {
                 try {
                     New-AdoRepo -OrgUrl $OrgUrl -Project $project -Name $repo.name
                     & $rCreated "repo: $($repo.name)"
-                } catch { & $rError "create repo '$($repo.name)': $_" }
-            } elseif ($Mode -eq 'WhatIf') { & $rWould "create repo: $($repo.name)"
-            } else                         { & $rMissing "repo: $($repo.name)" }
+                } catch {
+                    $findings.Add("ERROR creating repo '$($repo.name)': $_")
+                    & $rError "create repo '$($repo.name)': $_"
+                }
+            } else {
+                $findings.Add("MISSING repo: $($repo.name)")
+                if ($Mode -eq 'WhatIf') { & $rWould "create repo: $($repo.name)" }
+                else                     { & $rMissing "repo: $($repo.name)" }
+            }
         }
     }
 
@@ -243,16 +269,20 @@ function Invoke-GovernanceReconcile {
     foreach ($folder in @($Resolved.pipelineFolders | Where-Object { $_ })) {
         if ($liveFolders.ContainsKey($folder.path)) {
             & $rOk "folder: $($folder.path)"
-            # TODO: ACL compliance check (future increment — ADR-003)
         } else {
-            $findings.Add("MISSING pipeline folder: $($folder.path)")
             if ($doFix) {
                 try {
                     New-AdoPipelineFolder -OrgUrl $OrgUrl -Project $project -Path $folder.path
                     & $rCreated "folder: $($folder.path)"
-                } catch { & $rError "create folder '$($folder.path)': $_" }
-            } elseif ($Mode -eq 'WhatIf') { & $rWould "create folder: $($folder.path)"
-            } else                         { & $rMissing "folder: $($folder.path)" }
+                } catch {
+                    $findings.Add("ERROR creating folder '$($folder.path)': $_")
+                    & $rError "create folder '$($folder.path)': $_"
+                }
+            } else {
+                $findings.Add("MISSING pipeline folder: $($folder.path)")
+                if ($Mode -eq 'WhatIf') { & $rWould "create folder: $($folder.path)" }
+                else                     { & $rMissing "folder: $($folder.path)" }
+            }
         }
     }
 
@@ -271,18 +301,17 @@ function Invoke-GovernanceReconcile {
             default  { 'found' }
         }
         Write-Host "NON-COMPLIANT — $($findings.Count) finding(s) $suffix." -ForegroundColor Red
-
         if ($missing.Count -gt 0) {
             Write-Host "`n  Missing ($($missing.Count)):" -ForegroundColor Red
-            $missing | ForEach-Object { Write-Host "    • $_" -ForegroundColor Red }
+            $missing | ForEach-Object { Write-Host "    * $_" -ForegroundColor Red }
         }
         if ($drift.Count -gt 0) {
             Write-Host "`n  Drift ($($drift.Count)):" -ForegroundColor Red
-            $drift | ForEach-Object { Write-Host "    • $_" -ForegroundColor Red }
+            $drift | ForEach-Object { Write-Host "    * $_" -ForegroundColor Red }
         }
         if ($exceptions.Count -gt 0) {
             Write-Host "`n  Audit exceptions — exist in ADO but not in config ($($exceptions.Count)):" -ForegroundColor Magenta
-            $exceptions | ForEach-Object { Write-Host "    • $_" -ForegroundColor Magenta }
+            $exceptions | ForEach-Object { Write-Host "    * $_" -ForegroundColor Magenta }
         }
     }
 
