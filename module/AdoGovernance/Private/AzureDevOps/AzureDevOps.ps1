@@ -143,17 +143,32 @@ function Get-AdoTeamSet {
 }
 
 function New-AdoTeam {
-    <# Creates a team via REST. Idempotent: treats 'already exists' responses as success. #>
+    <# Creates a team via REST. Returns the new team GUID.
+       If the team already exists, looks it up and returns its GUID. #>
     [CmdletBinding()]
     param([string]$OrgUrl, [string]$Project, [string]$Name)
     try {
-        Invoke-AdoRest -OrgUrl $OrgUrl -Path "_apis/projects/$Project/teams" `
-            -Method 'POST' -Body @{ name = $Name } | Out-Null
+        $result = Invoke-AdoRest -OrgUrl $OrgUrl -Path "_apis/projects/$Project/teams" `
+            -Method 'POST' -Body @{ name = $Name }
+        return $result.id
     } catch {
         if ($_ -notmatch 'already exists|duplicate|409') {
             throw "Failed to create team '$Name': $_"
         }
+        # Already exists — look it up to return the GUID
+        $json = az devops team show --organization $OrgUrl --project $Project --team $Name --output json 2>$null
+        if ($LASTEXITCODE -eq 0 -and $json) { return ($json | ConvertFrom-Json).id }
+        throw "Failed to create team '$Name' and could not find existing team."
     }
+}
+
+function Set-AdoTeamName {
+    <# Renames an ADO team in-place by its GUID. Used when a governance rename is detected. #>
+    [CmdletBinding()]
+    param([string]$OrgUrl, [string]$Project, [string]$TeamId, [string]$NewName)
+    Invoke-AdoRest -OrgUrl $OrgUrl `
+        -Path "_apis/projects/$Project/teams/$([Uri]::EscapeDataString($TeamId))" `
+        -Method 'PATCH' -Body @{ name = $NewName } | Out-Null
 }
 
 # ─── REST helper ─────────────────────────────────────────────────────────────
@@ -397,19 +412,18 @@ function Get-AdoAreaPathSubtree {
 function Get-AdoTeamList {
     <#
         .SYNOPSIS
-        Returns a list of all team names for a project via the az devops CLI.
-        Uses CLI (not REST) because the org-level projects REST API requires a
-        broader PAT scope than the project-scoped APIs used elsewhere.
+        Returns a hashtable of teamName -> teamId for all teams in a project.
+        Uses the az devops CLI (reliable auth; avoids REST org-level scope issues).
     #>
     [CmdletBinding()]
     param([string]$OrgUrl, [string]$Project)
-    $names = [System.Collections.Generic.List[string]]::new()
+    $teams = @{}
     $json  = az devops team list --organization $OrgUrl --project $Project --output json 2>$null
     if ($LASTEXITCODE -ne 0 -or [string]::IsNullOrWhiteSpace($json)) {
         throw "Failed to list teams for '$Project' in '$OrgUrl' (exit $LASTEXITCODE)."
     }
     foreach ($team in ($json | ConvertFrom-Json)) {
-        if ($team.name) { $names.Add($team.name) }
+        if ($team.name) { $teams[$team.name] = $team.id }
     }
-    return $names
+    return $teams
 }

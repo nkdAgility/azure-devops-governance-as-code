@@ -42,11 +42,24 @@ function Import-GovernanceSource {
     $stream = [System.IO.MemoryStream]::new($bytes)
     $hash   = (Get-FileHash -InputStream $stream -Algorithm SHA256).Hash.ToLowerInvariant()
 
+    # team-ids.yaml: auto-maintained state file mapping codePath -> ADO team GUID.
+    # Allows teams to be found by stable codePath even after a rename.
+    $teamIdsPath = Join-Path $ProgramPath 'team-ids.yaml'
+    $teamIds     = @{}
+    if (Test-Path $teamIdsPath) {
+        $parsed = ConvertFrom-Yaml (Get-Content -Path $teamIdsPath -Raw)
+        if ($parsed -and $parsed.teams) {
+            foreach ($k in $parsed.teams.Keys) { $teamIds[$k] = $parsed.teams[$k] }
+        }
+    }
+
     return @{
-        Manifest  = $manifest
-        Hierarchy = $hierarchy
-        Access    = $access
-        Members   = $members
-        Hash      = $hash
+        Manifest     = $manifest
+        Hierarchy    = $hierarchy
+        Access       = $access
+        Members      = $members
+        Hash         = $hash
+        TeamIds      = $teamIds
+        TeamIdsPath  = $teamIdsPath
     }
 }

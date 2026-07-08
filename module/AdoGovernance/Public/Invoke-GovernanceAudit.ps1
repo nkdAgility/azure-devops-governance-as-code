@@ -18,7 +18,9 @@ function Invoke-GovernanceAudit {
     # Always build first — audit must reflect the latest authored config.
     Invoke-GovernanceBuild -ProgramPath $ProgramPath -OutputPath $ResolvedPath | Out-Null
 
-    $manifest  = (Import-GovernanceSource -ProgramPath $ProgramPath).Manifest
+    $source    = Import-GovernanceSource -ProgramPath $ProgramPath
+    $manifest  = $source.Manifest
+    $teamIds   = $source.TeamIds   # read-only in audit; not written back
     $targetOrg = if ($Org) { $Org } else { $manifest.org }
     $token     = Resolve-AccessToken $manifest.accessToken
     if (-not $token) {
@@ -31,5 +33,5 @@ function Invoke-GovernanceAudit {
     $reportPath = Join-Path (Split-Path $ResolvedPath -Parent) 'audit-report.txt'
 
     Write-Host "Auditing '$($resolved.program)' in $orgUrl" -ForegroundColor Cyan
-    Invoke-GovernanceReconcile -Resolved $resolved -OrgUrl $orgUrl -Mode 'Audit' -ReportPath $reportPath | Out-Null
+    Invoke-GovernanceReconcile -Resolved $resolved -OrgUrl $orgUrl -Mode 'Audit' -ReportPath $reportPath -TeamIds $teamIds | Out-Null
 }

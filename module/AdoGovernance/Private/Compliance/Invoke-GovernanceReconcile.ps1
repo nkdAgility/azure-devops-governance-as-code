@@ -23,7 +23,8 @@ function Invoke-GovernanceReconcile {
         [Parameter(Mandatory)][string]$OrgUrl,
         [ValidateSet('Audit', 'Apply', 'WhatIf')]
         [string]$Mode = 'Audit',
-        [string]$ReportPath = ''
+        [string]$ReportPath = '',
+        [hashtable]$TeamIds = @{}    # codePath -> ADO GUID; mutated in-place for caller to persist
     )
 
     $findings = [System.Collections.Generic.List[string]]::new()
@@ -87,23 +88,49 @@ function Invoke-GovernanceReconcile {
     # ── 2. Teams ──────────────────────────────────────────────────────────────
     Write-Host "`n--- Teams ---" -ForegroundColor Cyan
 
+    # $liveTeams  : name -> GUID  (from ADO)
+    # $reverseIds : GUID -> name  (reverse index for GUID-based lookup)
+    $liveTeams  = Get-AdoTeamList -OrgUrl $OrgUrl -Project $project
+    $reverseIds = @{}
+    foreach ($k in $liveTeams.Keys) { if ($liveTeams[$k]) { $reverseIds[$liveTeams[$k]] = $k } }
+
     $liveTeamNames = [System.Collections.Generic.HashSet[string]]::new(
-        [string[]]@(Get-AdoTeamList -OrgUrl $OrgUrl -Project $project),
+        [string[]]@($liveTeams.Keys | Where-Object { $_ }),
         [System.StringComparer]::OrdinalIgnoreCase)
 
     $desiredTeams = @($Resolved.teams | Where-Object {
         $_.name -ne $project -and $_.scope -ne 'future' })
 
     foreach ($team in $desiredTeams) {
-        $exists = $liveTeamNames.Contains($team.name)
+        $existingId   = $null
+        $existingName = $null
+
+        # Phase 1: find by current desired name (fast path)
+        if ($liveTeams.ContainsKey($team.name)) {
+            $existingId   = $liveTeams[$team.name]
+            $existingName = $team.name
+        }
+        # Phase 2: find by stored GUID (survives a rename in the config)
+        elseif ($TeamIds.ContainsKey($team.codePath)) {
+            $storedId = $TeamIds[$team.codePath]
+            if ($storedId -and $reverseIds.ContainsKey($storedId)) {
+                $existingId   = $storedId
+                $existingName = $reverseIds[$storedId]   # current ADO name (old name)
+            }
+        }
+
+        $exists = $null -ne $existingId
 
         if (-not $exists) {
+            # Team not found by name or GUID — create it
             if ($doFix) {
                 try {
-                    New-AdoTeam -OrgUrl $OrgUrl -Project $project -Name $team.name
+                    $newId = New-AdoTeam -OrgUrl $OrgUrl -Project $project -Name $team.name
                     & $rCreated "team: $($team.name)"
+                    $TeamIds[$team.codePath] = $newId
+                    $liveTeams[$team.name]   = $newId
                     $liveTeamNames.Add($team.name) | Out-Null
-                    $exists = $true
+                    $exists = $true; $existingId = $newId; $existingName = $team.name
                 } catch {
                     $findings.Add("ERROR creating team '$($team.name)': $_")
                     & $rError "create team '$($team.name)': $_"
@@ -114,8 +141,34 @@ function Invoke-GovernanceReconcile {
                 else                     { & $rMissing "team: $($team.name)" }
             }
         }
+        elseif ($existingName -ne $team.name) {
+            # Found by GUID but name doesn't match — rename
+            if ($doFix) {
+                try {
+                    Set-AdoTeamName -OrgUrl $OrgUrl -Project $project -TeamId $existingId -NewName $team.name
+                    & $rFixed "team: renamed '$existingName' -> '$($team.name)'"
+                    $liveTeams.Remove($existingName)
+                    $liveTeams[$team.name] = $existingId
+                    $liveTeamNames.Remove($existingName) | Out-Null
+                    $liveTeamNames.Add($team.name) | Out-Null
+                    $TeamIds[$team.codePath] = $existingId
+                    $existingName = $team.name
+                } catch {
+                    $findings.Add("ERROR renaming team '$existingName' to '$($team.name)': $_")
+                    & $rError "rename team '$existingName' to '$($team.name)': $_"
+                }
+            } else {
+                $findings.Add("DRIFT team '$($team.codePath)': name should be '$($team.name)' but ADO has '$existingName'")
+                if ($Mode -eq 'WhatIf') { & $rWould "rename team '$existingName' -> '$($team.name)'" }
+                else                     { & $rDrift "team '$($team.codePath)': name '$existingName' should be '$($team.name)'" }
+            }
+        }
+        else {
+            # Found by name — record GUID for future renames
+            $TeamIds[$team.codePath] = $existingId
+        }
 
-        if ($exists) {
+        if ($exists -and $existingName -eq $team.name) {
             try {
                 $liveConfig = Get-AdoTeamAreaConfig -OrgUrl $OrgUrl -Project $project -Team $team.name
                 $liveSet    = @{}
