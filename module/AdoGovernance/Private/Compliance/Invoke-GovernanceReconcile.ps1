@@ -85,7 +85,40 @@ function Invoke-GovernanceReconcile {
         }
     } catch { Write-Verbose "Area path audit exception check skipped: $_" }
 
-    # ── 2. Teams ──────────────────────────────────────────────────────────────
+    # ── 2. Iteration paths — must exist before teams are configured ─────────────
+    if ($Resolved.iterations -and $Resolved.iterations.paths) {
+        Write-Host "`n--- Iteration paths ---" -ForegroundColor Cyan
+
+        # Compliance rule: we only check that the DESIRED paths EXIST.
+        # Extra iteration paths in ADO that match the governance naming pattern
+        # (\Program\YYYY\S[n]\S[n]-W[n]) are NEVER flagged as audit exceptions —
+        # old sprints are expected to accumulate and are compliant by definition.
+
+        $iterPaths = @($Resolved.iterations.paths | Sort-Object { ($_.path -split '\\').Count })
+        foreach ($iter in $iterPaths) {
+            $exists = Test-AdoIterationPath -OrgUrl $OrgUrl -Project $project -ResolvedPath $iter.path
+            if ($exists) {
+                & $rOk "iter: $($iter.path)"
+            } else {
+                if ($doFix) {
+                    try {
+                        New-AdoIterationPath -OrgUrl $OrgUrl -Project $project `
+                            -ResolvedPath $iter.path -StartDate $iter.startDate -EndDate $iter.endDate
+                        & $rCreated "iter: $($iter.path)"
+                    } catch {
+                        $findings.Add("ERROR creating iteration '$($iter.path)': $_")
+                        & $rError "create iteration '$($iter.path)': $_"
+                    }
+                } else {
+                    $findings.Add("MISSING iteration: $($iter.path)")
+                    if ($Mode -eq 'WhatIf') { & $rWould "create iteration: $($iter.path)" }
+                    else                     { & $rMissing "iteration: $($iter.path)" }
+                }
+            }
+        }
+    }
+
+    # ── 3. Teams ──────────────────────────────────────────────────────────────
     Write-Host "`n--- Teams ---" -ForegroundColor Cyan
 
     # $liveTeams  : name -> GUID  (from ADO)
@@ -293,7 +326,7 @@ function Invoke-GovernanceReconcile {
         }
     }
 
-    # ── 4. Repos ──────────────────────────────────────────────────────────────
+    # ── 6. Repos ───────────────────────────────────────────────────────────────
     Write-Host "`n--- Repos ---" -ForegroundColor Cyan
 
     $liveRepos = Get-AdoRepoSet -OrgUrl $OrgUrl -Project $project
@@ -317,7 +350,7 @@ function Invoke-GovernanceReconcile {
         }
     }
 
-    # ── 5. Pipeline folders ───────────────────────────────────────────────────
+    # ── 7. Pipeline folders ────────────────────────────────────────────────────────
     Write-Host "`n--- Pipeline folders ---" -ForegroundColor Cyan
 
     $liveFolders = Get-AdoPipelineFolderSet -OrgUrl $OrgUrl -Project $project
@@ -341,36 +374,7 @@ function Invoke-GovernanceReconcile {
         }
     }
 
-    # ── 6. Iteration paths ────────────────────────────────────────────────────
-    if ($Resolved.iterations -and $Resolved.iterations.paths) {
-        Write-Host "`n--- Iteration paths ---" -ForegroundColor Cyan
-
-        # Parents must exist before children; sort by depth.
-        $iterPaths = @($Resolved.iterations.paths | Sort-Object { ($_.path -split '\\').Count })
-        foreach ($iter in $iterPaths) {
-            $exists = Test-AdoIterationPath -OrgUrl $OrgUrl -Project $project -ResolvedPath $iter.path
-            if ($exists) {
-                & $rOk "iter: $($iter.path)"
-            } else {
-                if ($doFix) {
-                    try {
-                        New-AdoIterationPath -OrgUrl $OrgUrl -Project $project `
-                            -ResolvedPath $iter.path -StartDate $iter.startDate -EndDate $iter.endDate
-                        & $rCreated "iter: $($iter.path)"
-                    } catch {
-                        $findings.Add("ERROR creating iteration '$($iter.path)': $_")
-                        & $rError "create iteration '$($iter.path)': $_"
-                    }
-                } else {
-                    $findings.Add("MISSING iteration: $($iter.path)")
-                    if ($Mode -eq 'WhatIf') { & $rWould "create iteration: $($iter.path)" }
-                    else                     { & $rMissing "iteration: $($iter.path)" }
-                }
-            }
-        }
-    }
-
-    # ── 7. Team iteration scope ───────────────────────────────────────────────
+    # ── 4. Team iteration scope — runs after both teams and iteration paths exist ──
     if ($Resolved.iterations -and $Resolved.iterations.config -and $doFix) {
         Write-Host "`n--- Team iteration scope ---" -ForegroundColor Cyan
 
@@ -383,10 +387,9 @@ function Invoke-GovernanceReconcile {
         $pBack    = if ($itCfg.portfolioDefaults.seasons.back)    { [int]$itCfg.portfolioDefaults.seasons.back }    else { 3 }
         $pFwd     = if ($itCfg.portfolioDefaults.seasons.forward) { [int]$itCfg.portfolioDefaults.seasons.forward } else { 3 }
 
-        # Cache iteration path -> GUID to avoid repeated API calls across teams
         $iterIdCache = @{}
 
-        foreach ($team in ($Resolved.teams | Where-Object { $_.scope -ne 'future' })) {
+        foreach ($team in ($Resolved.teams | Where-Object { $_.scope -ne 'future' -and $_.name -ne $project })) {
             $isPortfolio = ($team.kind -eq 'portfolio' -or $team.kind -eq 'product')
             $scopePaths  = if ($isPortfolio) {
                 Get-InScopeSeasonPaths -Calendar $calendar -Back $pBack -Forward $pFwd
@@ -419,7 +422,7 @@ function Invoke-GovernanceReconcile {
         }
     }
 
-    # ── Summary ───────────────────────────────────────────────────────────────
+    # ── 5. Security groups ────────────────────────────────────────────────────
     $exceptions = @($findings | Where-Object { $_ -like 'AUDIT EXCEPTION*' })
     $missing    = @($findings | Where-Object { $_ -like 'MISSING*' })
     $drift      = @($findings | Where-Object { $_ -notlike 'AUDIT EXCEPTION*' -and $_ -notlike 'MISSING*' })

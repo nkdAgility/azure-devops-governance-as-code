@@ -258,10 +258,19 @@ function Initialize-AdoTeamDefaults {
         if ($_ -notmatch 'already exists|duplicate|400') { throw }
     }
 
+    # Prefer year-level iteration as the backlog (e.g. \Odyssey\2026) over the root.
+    # The root is too high and ADO later rejects it with TF400497.
+    $backlogId = $iterRoot.identifier
+    try {
+        $yearNode  = Invoke-AdoRest -OrgUrl $OrgUrl `
+            -Path "$Project/_apis/wit/classificationnodes/iterations/$([DateTime]::Today.Year)"
+        if ($yearNode.identifier) { $backlogId = $yearNode.identifier }
+    } catch { <# year node not created yet — fall back to root #> }
+
     # Set it as the default backlog iteration
     Invoke-AdoRest -OrgUrl $OrgUrl `
         -Path "$Project/$encodedTeam/_apis/work/teamsettings" `
-        -Method 'PATCH' -Body @{ backlogIteration = @{ id = $iterRoot.identifier } } | Out-Null
+        -Method 'PATCH' -Body @{ backlogIteration = @{ id = $backlogId } } | Out-Null
 }
 
 function Get-AdoTeamAreaConfig {
@@ -554,12 +563,22 @@ function Get-AdoIterationId {
 }
 
 function Get-AdoTeamIterationSet {
-    <# Returns a hashtable of iteration GUID -> $true for a team's current iteration list. #>
+    <# Returns a hashtable of iteration GUID -> $true for a team's current iteration list.
+       Re-initialises team defaults and retries if TF400497 is raised (invalid backlog path). #>
     [CmdletBinding()]
     param([string]$OrgUrl, [string]$Project, [string]$Team)
     $set     = @{}
     $encoded = [Uri]::EscapeDataString($Team)
-    $data    = Invoke-AdoRest -OrgUrl $OrgUrl -Path "$Project/$encoded/_apis/work/teamsettings/iterations"
+    $apiPath = "$Project/$encoded/_apis/work/teamsettings/iterations"
+    try {
+        $data = Invoke-AdoRest -OrgUrl $OrgUrl -Path $apiPath
+    } catch {
+        if ($_ -match 'TF400497|backlog iteration') {
+            # Backlog iteration is invalid — reinitialise and retry once.
+            Initialize-AdoTeamDefaults -OrgUrl $OrgUrl -Project $Project -Team $Team
+            $data = Invoke-AdoRest -OrgUrl $OrgUrl -Path $apiPath
+        } else { throw }
+    }
     foreach ($i in @($data.value)) { if ($i.id) { $set[$i.id] = $true } }
     return $set
 }

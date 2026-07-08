@@ -173,7 +173,7 @@ Key decisions are recorded in `.agents/decisions/`. Read these before making str
 | [ADR-001](decisions/ADR-001-implementation-language.md) | PowerShell over Go — right for internal tooling; Go noted for future wide distribution |
 | [ADR-002](decisions/ADR-002-targeted-rest-checks.md) | Targeted REST checks over bulk fetches — bulk `az boards area project list` causes OOM on large projects |
 | [ADR-003](decisions/ADR-003-apply-is-corrective.md) | Apply is corrective, not just additive — existing but misconfigured resources must be patched |
-| [ADR-004](decisions/ADR-004-scope-future-filtering.md) | `scope:future` products are invisible to apply and audit until the flag is removed |
+| [ADR-005](decisions/ADR-005-iteration-compliance-rule.md) | Old governance iterations are compliant by definition — only check desired paths exist, never flag old sprints |
 
 ---
 
