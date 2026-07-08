@@ -70,26 +70,24 @@ function New-AdoProject {
     if ($LASTEXITCODE -ne 0) { throw "Failed to create project '$Project'." }
 }
 
-function Get-AdoAreaPathSet {
-    <# Returns a hashtable of existing area paths (keys like '\Project\Node'). #>
+function Test-AdoAreaPath {
+    <#
+        .SYNOPSIS
+        Returns $true if an area path already exists via a single targeted REST call.
+        Avoids loading the full classification tree (which causes OOM on large projects).
+    #>
     [CmdletBinding()]
-    param([string]$OrgUrl, [string]$Project)
-    $set = @{}
-    $json = az boards area project list --organization $OrgUrl --project $Project --depth 50 --output json 2>$null
-    if ($LASTEXITCODE -ne 0 -or [string]::IsNullOrWhiteSpace($json)) { return $set }
-
-    $root = $json | ConvertFrom-Json
-    $stack = [System.Collections.Generic.Stack[object]]::new()
-    $stack.Push([pscustomobject]@{ node = $root; prefix = '' })
-    while ($stack.Count) {
-        $item = $stack.Pop()
-        $path = "$($item.prefix)\$($item.node.name)"
-        $set[$path] = $true
-        foreach ($child in @($item.node.children)) {
-            $stack.Push([pscustomobject]@{ node = $child; prefix = $path })
-        }
-    }
-    return $set
+    param([string]$OrgUrl, [string]$Project, [string]$ResolvedPath)
+    # '\Odyssey\Portal\Platform' -> API sub-path 'Portal/Platform'
+    $segments = $ResolvedPath.TrimStart('\') -split '\\'
+    if ($segments.Count -le 1) { return $true }   # project root always exists
+    $apiSubPath = ($segments[1..($segments.Count - 1)] |
+        ForEach-Object { [Uri]::EscapeDataString($_) }) -join '/'
+    try {
+        Invoke-AdoRest -OrgUrl $OrgUrl `
+            -Path "$Project/_apis/wit/classificationnodes/areas/$apiSubPath" | Out-Null
+        return $true
+    } catch { return $false }
 }
 
 function New-AdoAreaPath {
@@ -103,6 +101,21 @@ function New-AdoAreaPath {
 
     az boards area project create --organization $OrgUrl --project $Project --name $name --path $azParent --output none
     if ($LASTEXITCODE -ne 0) { throw "Failed to create area path '$ResolvedPath'." }
+}
+
+function Test-AdoTeam {
+    <#
+        .SYNOPSIS
+        Returns $true if a team exists via a single targeted REST call.
+        Avoids loading all teams (which can be large on busy projects).
+    #>
+    [CmdletBinding()]
+    param([string]$OrgUrl, [string]$Project, [string]$Name)
+    $encoded = [Uri]::EscapeDataString($Name)
+    try {
+        Invoke-AdoRest -OrgUrl $OrgUrl -Path "_apis/projects/$Project/teams/$encoded" | Out-Null
+        return $true
+    } catch { return $false }
 }
 
 function Get-AdoTeamSet {
@@ -121,4 +134,192 @@ function New-AdoTeam {
     param([string]$OrgUrl, [string]$Project, [string]$Name)
     az devops team create --organization $OrgUrl --project $Project --name $Name --output none
     if ($LASTEXITCODE -ne 0) { throw "Failed to create team '$Name'." }
+}
+
+# ─── REST helper ─────────────────────────────────────────────────────────────
+
+function Invoke-AdoRest {
+    <#
+        .SYNOPSIS
+        Generic REST helper for Azure DevOps API calls.
+        Requires $env:AZURE_DEVOPS_EXT_PAT to be set (via Set-AdoAuth).
+    #>
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)][string]$OrgUrl,
+        [Parameter(Mandatory)][string]$Path,
+        [string]$Method     = 'GET',
+        [object]$Body       = $null,
+        [string]$ApiVersion = '7.1'
+    )
+    $encoded = [Convert]::ToBase64String(
+        [Text.Encoding]::ASCII.GetBytes(":$($env:AZURE_DEVOPS_EXT_PAT)"))
+    $headers = @{ Authorization = "Basic $encoded" }
+    $uri     = "$($OrgUrl.TrimEnd('/'))/$Path"
+    $sep     = if ($uri.Contains('?')) { '&' } else { '?' }
+    $uri    += "${sep}api-version=$ApiVersion"
+
+    $params = @{ Uri = $uri; Method = $Method; Headers = $headers; ErrorAction = 'Stop' }
+    if ($null -ne $Body) {
+        $params['Body']        = ($Body | ConvertTo-Json -Depth 10 -Compress)
+        $params['ContentType'] = 'application/json'
+    }
+    return Invoke-RestMethod @params
+}
+
+# ─── Project identity ─────────────────────────────────────────────────────────
+
+function Get-AdoProjectId {
+    <# Returns the project GUID, or $null if not found. #>
+    [CmdletBinding()]
+    param([string]$OrgUrl, [string]$Project)
+    $result = az devops project show --organization $OrgUrl --project $Project `
+        --query id --output tsv 2>$null
+    if ($LASTEXITCODE -ne 0) { return $null }
+    return $result.Trim()
+}
+
+# ─── Team area configuration (REST) ──────────────────────────────────────────
+
+function Get-AdoTeamAreaConfig {
+    <# Returns the current team area configuration via the work settings REST API. #>
+    [CmdletBinding()]
+    param([string]$OrgUrl, [string]$Project, [string]$Team)
+    $encodedTeam = [Uri]::EscapeDataString($Team)
+    return Invoke-AdoRest -OrgUrl $OrgUrl `
+        -Path "$Project/$encodedTeam/_apis/work/teamsettings/teamfieldvalues"
+}
+
+function Set-AdoTeamAreaConfig {
+    <#
+        .SYNOPSIS
+        Replaces a team's area path configuration wholesale via REST.
+
+        AreaConfig: array of objects with 'path' (\Project\...) and 'includeSubAreas' ($bool).
+        REST API paths are sent without the leading backslash.
+    #>
+    [CmdletBinding()]
+    param(
+        [string]$OrgUrl,
+        [string]$Project,
+        [string]$Team,
+        [object[]]$AreaConfig
+    )
+    $values = @($AreaConfig | ForEach-Object {
+        [ordered]@{ value = $_.path.TrimStart('\'); includeChildren = [bool]$_.includeSubAreas }
+    })
+    $body = [ordered]@{
+        defaultValue = $AreaConfig[0].path.TrimStart('\')
+        values       = $values
+    }
+    $encodedTeam = [Uri]::EscapeDataString($Team)
+    Invoke-AdoRest -OrgUrl $OrgUrl `
+        -Path "$Project/$encodedTeam/_apis/work/teamsettings/teamfieldvalues" `
+        -Method 'PATCH' -Body $body | Out-Null
+}
+
+# ─── Repos ────────────────────────────────────────────────────────────────────
+
+function Get-AdoRepoSet {
+    <# Returns a hashtable of existing repo names. #>
+    [CmdletBinding()]
+    param([string]$OrgUrl, [string]$Project)
+    $set  = @{}
+    $json = az repos list --organization $OrgUrl --project $Project --output json 2>$null
+    if ($LASTEXITCODE -ne 0 -or [string]::IsNullOrWhiteSpace($json)) { return $set }
+    foreach ($repo in ($json | ConvertFrom-Json)) { $set[$repo.name] = $true }
+    return $set
+}
+
+function New-AdoRepo {
+    [CmdletBinding()]
+    param([string]$OrgUrl, [string]$Project, [string]$Name)
+    az repos create --organization $OrgUrl --project $Project --name $Name --output none
+    if ($LASTEXITCODE -ne 0) { throw "Failed to create repo '$Name'." }
+}
+
+# ─── Security groups (CLI) ────────────────────────────────────────────────────
+
+function Get-AdoGroupSet {
+    <# Returns a hashtable of displayName -> descriptor for project-scoped groups. #>
+    [CmdletBinding()]
+    param([string]$OrgUrl, [string]$Project)
+    $set    = @{}
+    $json   = az devops security group list --organization $OrgUrl --project $Project `
+        --output json 2>$null
+    if ($LASTEXITCODE -ne 0 -or [string]::IsNullOrWhiteSpace($json)) { return $set }
+    $parsed = $json | ConvertFrom-Json
+    # The CLI may return an array directly or a wrapped object.
+    $groups = if ($parsed -is [array])             { $parsed }
+              elseif ($null -ne $parsed.graphGroups) { $parsed.graphGroups }
+              elseif ($null -ne $parsed.value)       { $parsed.value }
+              else                                   { @() }
+    foreach ($g in $groups) { $set[$g.displayName] = $g.descriptor }
+    return $set
+}
+
+function New-AdoGroup {
+    <# Creates a project-scoped security group and returns its descriptor. #>
+    [CmdletBinding()]
+    param([string]$OrgUrl, [string]$Project, [string]$Name)
+    $json = az devops security group create --organization $OrgUrl --project $Project `
+        --name $Name --output json 2>&1
+    if ($LASTEXITCODE -ne 0) { throw "Failed to create group '$Name': $json" }
+    return ($json | ConvertFrom-Json).descriptor
+}
+
+# ─── Group membership (REST graph API) ────────────────────────────────────────
+
+function Get-AdoGroupMemberSet {
+    <# Returns a hashtable of memberDescriptor -> $true for all direct members of a group. #>
+    [CmdletBinding()]
+    param([string]$OrgUrl, [string]$Descriptor)
+    $set  = @{}
+    $data = Invoke-AdoRest -OrgUrl $OrgUrl `
+        -Path "_apis/graph/memberships/$([Uri]::EscapeDataString($Descriptor))?direction=Down" `
+        -ApiVersion '7.1-preview.1'
+    foreach ($m in @($data.value)) { if ($m.memberDescriptor) { $set[$m.memberDescriptor] = $true } }
+    return $set
+}
+
+function Find-AdoUserDescriptor {
+    <# Looks up an ADO user by UPN/email and returns the graph descriptor, or $null. #>
+    [CmdletBinding()]
+    param([string]$OrgUrl, [string]$Upn)
+    $json = az devops user show --organization $OrgUrl --user $Upn --output json 2>$null
+    if ($LASTEXITCODE -ne 0 -or [string]::IsNullOrWhiteSpace($json)) { return $null }
+    $user = ($json | ConvertFrom-Json).user
+    return $user.subjectDescriptor ?? $user.descriptor
+}
+
+function Add-AdoGroupMember {
+    <# Adds a member (by descriptor) to a group (by descriptor) via the graph memberships API. #>
+    [CmdletBinding()]
+    param([string]$OrgUrl, [string]$MemberDescriptor, [string]$ContainerDescriptor)
+    $mEnc = [Uri]::EscapeDataString($MemberDescriptor)
+    $cEnc = [Uri]::EscapeDataString($ContainerDescriptor)
+    Invoke-AdoRest -OrgUrl $OrgUrl -Path "_apis/graph/memberships/$mEnc/$cEnc" `
+        -Method 'PUT' -ApiVersion '7.1-preview.1' | Out-Null
+}
+
+# ─── Pipeline folders (CLI) ───────────────────────────────────────────────────
+
+function Get-AdoPipelineFolderSet {
+    <# Returns a hashtable of existing pipeline folder paths (e.g. '\Portal\Platform\Foundation'). #>
+    [CmdletBinding()]
+    param([string]$OrgUrl, [string]$Project)
+    $set  = @{}
+    $json = az pipelines folder list --organization $OrgUrl --project $Project `
+        --output json 2>$null
+    if ($LASTEXITCODE -ne 0 -or [string]::IsNullOrWhiteSpace($json)) { return $set }
+    foreach ($folder in ($json | ConvertFrom-Json)) { $set[$folder.path] = $true }
+    return $set
+}
+
+function New-AdoPipelineFolder {
+    [CmdletBinding()]
+    param([string]$OrgUrl, [string]$Project, [string]$Path)
+    az pipelines folder create --organization $OrgUrl --project $Project `
+        --path $Path --output none
+    if ($LASTEXITCODE -ne 0) { throw "Failed to create pipeline folder '$Path'." }
 }
