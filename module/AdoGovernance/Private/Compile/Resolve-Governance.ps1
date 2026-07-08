@@ -123,7 +123,7 @@ function Resolve-Governance {
         }
         else {
             $teamObj = [ordered]@{
-                name            = $product.name
+                name            = "$($product.name) (portfolio)"
                 short           = $product.short
                 kind            = 'product'
                 parent          = $program

@@ -224,6 +224,29 @@ function Get-AdoProjectId {
 
 # ─── Team area configuration (REST) ──────────────────────────────────────────
 
+function Initialize-AdoTeamDefaults {
+    <#
+        .SYNOPSIS
+        Sets the project root iteration as the team's default backlog iteration.
+        Required before teamfieldvalues PATCH will succeed on a newly created team
+        (ADO throws TF400509 if no backlog iteration is configured).
+    #>
+    [CmdletBinding()]
+    param([string]$OrgUrl, [string]$Project, [string]$Team)
+    try {
+        $iterRoot    = Invoke-AdoRest -OrgUrl $OrgUrl `
+            -Path "$Project/_apis/wit/classificationnodes/iterations?`$depth=0"
+        if (-not $iterRoot.identifier) { return }
+        $encodedTeam = [Uri]::EscapeDataString($Team)
+        Invoke-AdoRest -OrgUrl $OrgUrl `
+            -Path "$Project/$encodedTeam/_apis/work/teamsettings" `
+            -Method 'PATCH' `
+            -Body @{ backlogIteration = @{ id = $iterRoot.identifier } } | Out-Null
+    } catch {
+        Write-Verbose "Initialize-AdoTeamDefaults '$Team': $_"
+    }
+}
+
 function Get-AdoTeamAreaConfig {
     <# Returns the current team area configuration via the work settings REST API. #>
     [CmdletBinding()]
@@ -237,6 +260,8 @@ function Set-AdoTeamAreaConfig {
     <#
         .SYNOPSIS
         Replaces a team's area path configuration wholesale via REST.
+        If ADO throws TF400509 (no backlog iteration), initialises team defaults
+        and retries once automatically.
 
         AreaConfig: array of objects with 'path' (\Project\...) and 'includeSubAreas' ($bool).
         REST API paths are sent without the leading backslash.
@@ -256,9 +281,16 @@ function Set-AdoTeamAreaConfig {
         values       = $values
     }
     $encodedTeam = [Uri]::EscapeDataString($Team)
-    Invoke-AdoRest -OrgUrl $OrgUrl `
-        -Path "$Project/$encodedTeam/_apis/work/teamsettings/teamfieldvalues" `
-        -Method 'PATCH' -Body $body | Out-Null
+    $apiPath     = "$Project/$encodedTeam/_apis/work/teamsettings/teamfieldvalues"
+    try {
+        Invoke-AdoRest -OrgUrl $OrgUrl -Path $apiPath -Method 'PATCH' -Body $body | Out-Null
+    } catch {
+        if ($_ -match 'TF400509|backlog iteration') {
+            # Team is missing its default backlog iteration — initialise it and retry once.
+            Initialize-AdoTeamDefaults -OrgUrl $OrgUrl -Project $Project -Team $Team
+            Invoke-AdoRest -OrgUrl $OrgUrl -Path $apiPath -Method 'PATCH' -Body $body | Out-Null
+        } else { throw }
+    }
 }
 
 # ─── Repos ────────────────────────────────────────────────────────────────────

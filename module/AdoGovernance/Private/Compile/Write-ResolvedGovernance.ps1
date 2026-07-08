@@ -38,7 +38,8 @@ function Test-ResolvedGovernance {
     param([Parameter(Mandatory)][object]$Resolved)
 
     $issues = [System.Collections.Generic.List[string]]::new()
-    $forbidden = '[\\/:*?"<>|#$&+]'
+    $forbidden        = '[\\/:*?"<>|#$&+]'
+    $forbiddenInTeams = '[,"/\\[\]:!|<>+=;?*@~''&$#]'   # ADO team name forbidden chars
 
     # Unique code chains (the global ownership keys, e.g. PTL-FND). Leaf shorts may
     # repeat across products; the product-qualified code must be unique.
@@ -54,6 +55,12 @@ function Test-ResolvedGovernance {
         foreach ($segment in $segments) {
             if ($segment.Length -gt 255) { $issues.Add("Area path segment > 255 chars: $segment") }
             if ($segment -match $forbidden) { $issues.Add("Area path segment contains forbidden characters: $segment") }
+        }
+    }
+
+    foreach ($team in $Resolved.teams) {
+        if ($team.name -match $forbiddenInTeams) {
+            $issues.Add("Team name contains ADO-forbidden characters: '$($team.name)'")
         }
     }
 

@@ -215,7 +215,7 @@ function Invoke-GovernanceReconcile {
     }
 
     $desiredTeamNameSet = [System.Collections.Generic.HashSet[string]]::new(
-        [string[]]@(@($desiredTeams | ForEach-Object { $_.name }) + @($project)),
+        [string[]]@(@($desiredTeams | ForEach-Object { $_.name }) + @($project) + @("$project Team")),
         [System.StringComparer]::OrdinalIgnoreCase)
     foreach ($liveName in ($liveTeamNames | Sort-Object)) {
         if (-not $desiredTeamNameSet.Contains($liveName)) {
