@@ -32,10 +32,10 @@ function Invoke-GovernanceReconcile {
     $rOk      = { param($m) Write-Host "  [ok]      $m" -ForegroundColor Green }
     $rCreated = { param($m) Write-Host "  [+]       $m  [created]" -ForegroundColor Yellow }
     $rFixed   = { param($m) Write-Host "  [~]       $m  [corrected]" -ForegroundColor Yellow }
-    $rWould   = { param($m) Write-Host "  [?]       $m  [would fix]" -ForegroundColor Cyan }
+    $rWould   = { param($m) Write-Host "  [NON-COMPLIANT] $m  (dry-run: no changes made)" -ForegroundColor Cyan }
     $rMissing = { param($m) Write-Host "  [MISSING] $m" -ForegroundColor Red }
     $rDrift   = { param($m) Write-Host "  [DRIFT]   $m" -ForegroundColor Red }
-    $rOrphan  = { param($m) Write-Host "  [ORPHAN]  $m  (manual removal required)" -ForegroundColor Magenta }
+    $rOrphan  = { param($m) Write-Host "  [AUDIT EXCEPTION] $m  (exists in ADO but not in config — remove or add to config)" -ForegroundColor Magenta }
     $rError   = { param($m) Write-Host "  [ERROR]   $m" -ForegroundColor Red }
 
     # ── 1. Area paths ─────────────────────────────────────────────────────────
@@ -65,7 +65,7 @@ function Invoke-GovernanceReconcile {
     # Orphan area paths — exist in ADO but absent from the resolved model
     foreach ($livePath in ($liveAreas.Keys | Sort-Object)) {
         if ($livePath -notin $desiredPaths) {
-            $findings.Add("ORPHAN area path: $livePath")
+            $findings.Add("AUDIT EXCEPTION area path: $livePath")
             & $rOrphan "area path: $livePath"
         }
     }
@@ -145,7 +145,7 @@ function Invoke-GovernanceReconcile {
         [System.StringComparer]::OrdinalIgnoreCase)
     foreach ($liveName in ($liveTeamNames | Sort-Object)) {
         if (-not $desiredTeamNameSet.Contains($liveName)) {
-            $findings.Add("ORPHAN team: $liveName")
+            $findings.Add("AUDIT EXCEPTION team: $liveName")
             & $rOrphan "team: $liveName"
         }
     }

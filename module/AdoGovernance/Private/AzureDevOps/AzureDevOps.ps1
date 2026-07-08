@@ -166,7 +166,8 @@ function Invoke-AdoRest {
     )
     $encoded = [Convert]::ToBase64String(
         [Text.Encoding]::ASCII.GetBytes(":$($env:AZURE_DEVOPS_EXT_PAT)"))
-    $headers = @{ Authorization = "Basic $encoded" }
+    # Accept: application/json is required — without it ADO returns an HTML page (HTTP 203).
+    $headers = @{ Authorization = "Basic $encoded"; Accept = 'application/json' }
     $uri     = "$($OrgUrl.TrimEnd('/'))/$Path"
     $sep     = if ($uri.Contains('?')) { '&' } else { '?' }
     $uri    += "${sep}api-version=$ApiVersion"
@@ -393,7 +394,7 @@ function Get-AdoTeamList {
         $data  = Invoke-AdoRest -OrgUrl $OrgUrl `
             -Path "_apis/projects/$Project/teams?`$skip=$pageSkip&`$top=$pageTop"
         $batch = @($data.value)
-        foreach ($t in $batch) { $names.Add($t.name) }
+        foreach ($t in $batch) { if ($t.name) { $names.Add($t.name) } }  # skip empty/null names
         $pageSkip += $pageTop
     } while ($batch.Count -eq $pageTop)
     return $names
