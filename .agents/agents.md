@@ -1,5 +1,21 @@
 # Azure DevOps Governance-as-Code — Agent & Contributor Guide
 
+## Non-negotiable rules for contributors and agents
+
+> **After every code change, run the tests. No exceptions.**
+
+```powershell
+pwsh -NoProfile -Command { Invoke-Pester ./tests/Compile.Tests.ps1 -Output Normal }
+```
+
+If the tests fail, fix the failure before doing anything else. Do not move on, do not explain, do not commit. Fix it.
+
+**Silent errors are never acceptable.** If a function cannot complete its work, it must throw. Returning `$null`, an empty set, or `$false` when a call fails is a bug. Every caller depends on the error surfacing immediately.
+
+**Memory scope is this repo only.** Never write to user memory (`/memories/`) or session memory (`/memories/session/`). Do not use the memory tool for persistent notes — write them directly to files under `.agents/` in this repository instead. The `/memories/repo/` tool writes to VS Code workspace storage, not to the repo on disk.
+
+---
+
 ## What this system is
 
 A compliance engine for Azure DevOps. The YAML files in `programs/` are the **single source of truth**. Everything in a live ADO organisation must match them exactly. Any deviation — missing, extra, or misconfigured — is non-compliant and must be flagged.

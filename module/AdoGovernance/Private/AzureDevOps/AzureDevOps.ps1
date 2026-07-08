@@ -87,7 +87,12 @@ function Test-AdoAreaPath {
         Invoke-AdoRest -OrgUrl $OrgUrl `
             -Path "$Project/_apis/wit/classificationnodes/areas/$apiSubPath" | Out-Null
         return $true
-    } catch { return $false }
+    } catch {
+        # Only treat a genuine 404 as 'not found' — re-throw anything else (auth failure, HTML
+        # response, network error) so the caller sees the real problem.
+        if ($_ -match '404|Not Found') { return $false }
+        throw
+    }
 }
 
 function New-AdoAreaPath {
@@ -172,12 +177,19 @@ function Invoke-AdoRest {
     $sep     = if ($uri.Contains('?')) { '&' } else { '?' }
     $uri    += "${sep}api-version=$ApiVersion"
 
-    $params = @{ Uri = $uri; Method = $Method; Headers = $headers; ErrorAction = 'Stop' }
+    $params = @{ Uri = $uri; Method = $Method; Headers = $headers; ErrorAction = 'Stop';
+                 PreserveAuthorizationOnRedirect = $true }
     if ($null -ne $Body) {
         $params['Body']        = ($Body | ConvertTo-Json -Depth 10 -Compress)
         $params['ContentType'] = 'application/json'
     }
-    return Invoke-RestMethod @params
+    $response = Invoke-RestMethod @params
+    # ADO returns an HTML sign-in page (HTTP 203) when auth fails or the PAT lacks scope.
+    # A string response here is always wrong — fail loudly rather than silently returning null.
+    if ($response -is [string]) {
+        throw "ADO REST returned non-JSON (HTML/text). Check PAT is set and has the required scope. URL: $uri"
+    }
+    return $response
 }
 
 # ─── Project identity ─────────────────────────────────────────────────────────
@@ -382,20 +394,19 @@ function Get-AdoAreaPathSubtree {
 function Get-AdoTeamList {
     <#
         .SYNOPSIS
-        Returns a list of all team names for a project via paginated REST calls.
-        Safe on large projects — fetches 100 at a time, never loads the full payload.
+        Returns a list of all team names for a project via the az devops CLI.
+        Uses CLI (not REST) because the org-level projects REST API requires a
+        broader PAT scope than the project-scoped APIs used elsewhere.
     #>
     [CmdletBinding()]
     param([string]$OrgUrl, [string]$Project)
-    $names    = [System.Collections.Generic.List[string]]::new()
-    $pageSkip = 0
-    $pageTop  = 100
-    do {
-        $data  = Invoke-AdoRest -OrgUrl $OrgUrl `
-            -Path "_apis/projects/$Project/teams?`$skip=$pageSkip&`$top=$pageTop"
-        $batch = @($data.value)
-        foreach ($t in $batch) { if ($t.name) { $names.Add($t.name) } }  # skip empty/null names
-        $pageSkip += $pageTop
-    } while ($batch.Count -eq $pageTop)
+    $names = [System.Collections.Generic.List[string]]::new()
+    $json  = az devops team list --organization $OrgUrl --project $Project --output json 2>$null
+    if ($LASTEXITCODE -ne 0 -or [string]::IsNullOrWhiteSpace($json)) {
+        throw "Failed to list teams for '$Project' in '$OrgUrl' (exit $LASTEXITCODE)."
+    }
+    foreach ($team in ($json | ConvertFrom-Json)) {
+        if ($team.name) { $names.Add($team.name) }
+    }
     return $names
 }
