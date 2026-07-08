@@ -201,6 +201,7 @@ function Resolve-Governance {
     # catalog. Governance owns the folder + ACL; teams create the definitions.
     foreach ($team in $ctx.Teams) {
         if (-not $team.pipelineFolder) { continue }
+        if ($team.scope -eq 'future') { continue }   # scope:future products are invisible
         $acl = [System.Collections.Generic.List[object]]::new()
         foreach ($group in $team.securityGroups) {
             $roleDef = $Access.roles[[string]$group.role]

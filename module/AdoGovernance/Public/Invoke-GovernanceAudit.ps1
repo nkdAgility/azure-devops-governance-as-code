@@ -26,9 +26,10 @@ function Invoke-GovernanceAudit {
     }
     Set-AdoAuth $token
 
-    $orgUrl   = ConvertTo-AdoOrgUrl -Org $targetOrg
-    $resolved = ConvertFrom-Yaml (Get-Content $ResolvedPath -Raw)
+    $orgUrl     = ConvertTo-AdoOrgUrl -Org $targetOrg
+    $resolved   = ConvertFrom-Yaml (Get-Content $ResolvedPath -Raw)
+    $reportPath = Join-Path (Split-Path $ResolvedPath -Parent) 'audit-report.txt'
 
     Write-Host "Auditing '$($resolved.program)' in $orgUrl" -ForegroundColor Cyan
-    Invoke-GovernanceReconcile -Resolved $resolved -OrgUrl $orgUrl -Mode 'Audit'
+    Invoke-GovernanceReconcile -Resolved $resolved -OrgUrl $orgUrl -Mode 'Audit' -ReportPath $reportPath | Out-Null
 }

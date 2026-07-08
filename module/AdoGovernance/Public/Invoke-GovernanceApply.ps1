@@ -32,5 +32,5 @@ function Invoke-GovernanceApply {
     $mode     = if ($WhatIf) { 'WhatIf' } else { 'Apply' }
 
     Write-Host "Applying '$($resolved.program)' in $orgUrl  [mode: $mode]" -ForegroundColor Cyan
-    Invoke-GovernanceReconcile -Resolved $resolved -OrgUrl $orgUrl -Mode $mode
+    Invoke-GovernanceReconcile -Resolved $resolved -OrgUrl $orgUrl -Mode $mode | Out-Null
 }
