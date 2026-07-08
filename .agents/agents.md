@@ -16,6 +16,17 @@ If the tests fail, fix the failure before doing anything else. Do not move on, d
 
 ---
 
+## Environment variables
+
+| Variable | Purpose |
+|---|---|
+| `AZDEVOPS_DEV_PAT` | Personal Access Token for `nkdagility-preview` org. Used by `programs/odyssey/manifest.yaml` as `accessToken`. |
+| `AZDEVOPS_DEV_ORG` | Org URL (`https://dev.azure.com/nkdagility-preview`). **Not a PAT.** Do not use as `accessToken`. |
+
+If a manifest's `accessToken` resolves to a URL, `Set-AdoAuth` will throw immediately (guard is in `AzureDevOps.ps1`).
+
+---
+
 ## What this system is
 
 A compliance engine for Azure DevOps. The YAML files in `programs/` are the **single source of truth**. Everything in a live ADO organisation must match them exactly. Any deviation — missing, extra, or misconfigured — is non-compliant and must be flagged.
