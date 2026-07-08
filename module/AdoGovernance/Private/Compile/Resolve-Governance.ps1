@@ -120,7 +120,7 @@ function Resolve-Governance {
             Add-OwnedEntry -Ctx $ctx -Key $product.owner -Path $productPath -IncludeSubAreas $true
         }
         else {
-            $ctx.Teams.Add([ordered]@{
+            $teamObj = [ordered]@{
                 name            = $product.name
                 short           = $product.short
                 kind            = 'product'
@@ -129,7 +129,9 @@ function Resolve-Governance {
                 defaultAreaPath = $productPath
                 includeSubAreas = $true
                 pipelineFolder  = $productPath.Substring($root.Length)
-            })
+            }
+            if ($product.scope) { $teamObj.scope = $product.scope }
+            $ctx.Teams.Add($teamObj)
         }
 
         foreach ($section in @($product.sections | Where-Object { $null -ne $_ })) {

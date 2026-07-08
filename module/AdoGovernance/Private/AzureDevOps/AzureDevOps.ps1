@@ -115,7 +115,12 @@ function Test-AdoTeam {
     try {
         Invoke-AdoRest -OrgUrl $OrgUrl -Path "_apis/projects/$Project/teams/$encoded" | Out-Null
         return $true
-    } catch { return $false }
+    } catch {
+        # Only treat a genuine 404 as 'not found'; any other error re-throws so
+        # the caller isn't tricked into creating a team that actually exists.
+        if ($_ -match '404|Not Found') { return $false }
+        throw
+    }
 }
 
 function Get-AdoTeamSet {
@@ -130,10 +135,17 @@ function Get-AdoTeamSet {
 }
 
 function New-AdoTeam {
+    <# Creates a team via REST. Idempotent: treats 'already exists' responses as success. #>
     [CmdletBinding()]
     param([string]$OrgUrl, [string]$Project, [string]$Name)
-    az devops team create --organization $OrgUrl --project $Project --name $Name --output none
-    if ($LASTEXITCODE -ne 0) { throw "Failed to create team '$Name'." }
+    try {
+        Invoke-AdoRest -OrgUrl $OrgUrl -Path "_apis/projects/$Project/teams" `
+            -Method 'POST' -Body @{ name = $Name } | Out-Null
+    } catch {
+        if ($_ -notmatch 'already exists|duplicate|409') {
+            throw "Failed to create team '$Name': $_"
+        }
+    }
 }
 
 # ─── REST helper ─────────────────────────────────────────────────────────────

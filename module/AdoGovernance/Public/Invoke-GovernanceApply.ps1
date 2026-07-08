@@ -48,8 +48,10 @@ function Invoke-GovernanceApply {
     }
 
     # 2. area paths (parents before children; each checked via REST to avoid loading the full tree)
-    $areaPaths = @($resolved.areaPaths | ForEach-Object { $_.path } |
-            Where-Object { ($_ -split '\\').Count -gt 2 }) |
+    # scope:future area paths are excluded — those products are not in the current migration scope.
+    $areaPaths = @($resolved.areaPaths |
+            Where-Object { ($_.path -split '\\').Count -gt 2 -and $_.scope -ne 'future' } |
+            ForEach-Object { $_.path }) |
         Sort-Object { ($_ -split '\\').Count }
 
     $areaCreated = 0
@@ -63,10 +65,11 @@ function Invoke-GovernanceApply {
         }
     }
 
-    # 3. teams (skip the project default team; each checked via REST)
+    # 3. teams (skip the project default team and scope:future products; each checked via REST)
     $teamCreated = 0
     foreach ($team in $resolved.teams) {
         if ($team.name -eq $project) { continue }
+        if ($team.scope -eq 'future') { continue }
         if (-not $projectExists) { break }
         if (Test-AdoTeam -OrgUrl $orgUrl -Project $project -Name $team.name) { continue }
         if ($PSCmdlet.ShouldProcess($team.name, 'create team')) {
@@ -82,6 +85,7 @@ function Invoke-GovernanceApply {
     $areaConfigUpdated = 0
     foreach ($team in $resolved.teams) {
         if ($team.name -eq $project) { continue }   # default team — leave as-is
+        if ($team.scope -eq 'future') { continue }  # not in current migration scope
         if (-not $projectExists) { break }
         $desired = @($team.areaConfig | Where-Object { $_ })
         if ($desired.Count -eq 0) { continue }
@@ -103,6 +107,7 @@ function Invoke-GovernanceApply {
     $groupMap       = @{}    # ado-name -> descriptor
 
     foreach ($team in $resolved.teams) {
+        if ($team.scope -eq 'future') { continue }
         foreach ($grp in @($team.securityGroups | Where-Object { $_ })) {
             if ($groupMap.ContainsKey($grp.ado)) { continue }
             if ($existingGroups.ContainsKey($grp.ado)) {
@@ -127,6 +132,7 @@ function Invoke-GovernanceApply {
     # Resolves email-based members; non-email entries (Entra groups) are logged
     # at Verbose and deferred to a future increment.
     foreach ($team in $resolved.teams) {
+        if ($team.scope -eq 'future') { continue }
         foreach ($grp in @($team.securityGroups | Where-Object { $_ })) {
             $members = @($grp.members | Where-Object { $_ })
             if ($members.Count -eq 0) { continue }
