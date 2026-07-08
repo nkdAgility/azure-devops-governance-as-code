@@ -227,24 +227,41 @@ function Get-AdoProjectId {
 function Initialize-AdoTeamDefaults {
     <#
         .SYNOPSIS
-        Sets the project root iteration as the team's default backlog iteration.
-        Required before teamfieldvalues PATCH will succeed on a newly created team
-        (ADO throws TF400509 if no backlog iteration is configured).
+        Configures a newly created team with the minimum settings needed before
+        teamfieldvalues PATCH will succeed (ADO throws TF400509 otherwise).
+
+        Steps:
+          1. Fetch the project root iteration node GUID.
+          2. Add it to the team's iteration list (POST teamsettings/iterations).
+          3. Set it as the team's default backlog iteration (PATCH teamsettings).
+
+        No iteration paths are created — the project root always exists.
+        Throws on failure so the caller sees the real error.
     #>
     [CmdletBinding()]
     param([string]$OrgUrl, [string]$Project, [string]$Team)
-    try {
-        $iterRoot    = Invoke-AdoRest -OrgUrl $OrgUrl `
-            -Path "$Project/_apis/wit/classificationnodes/iterations?`$depth=0"
-        if (-not $iterRoot.identifier) { return }
-        $encodedTeam = [Uri]::EscapeDataString($Team)
-        Invoke-AdoRest -OrgUrl $OrgUrl `
-            -Path "$Project/$encodedTeam/_apis/work/teamsettings" `
-            -Method 'PATCH' `
-            -Body @{ backlogIteration = @{ id = $iterRoot.identifier } } | Out-Null
-    } catch {
-        Write-Verbose "Initialize-AdoTeamDefaults '$Team': $_"
+
+    $iterRoot = Invoke-AdoRest -OrgUrl $OrgUrl `
+        -Path "$Project/_apis/wit/classificationnodes/iterations?`$depth=0"
+    if (-not $iterRoot.identifier) {
+        throw "Initialize-AdoTeamDefaults: could not find root iteration node for '$Project'."
     }
+
+    $encodedTeam = [Uri]::EscapeDataString($Team)
+
+    # Add root iteration to the team's iteration list (idempotent — ignore if already present)
+    try {
+        Invoke-AdoRest -OrgUrl $OrgUrl `
+            -Path "$Project/$encodedTeam/_apis/work/teamsettings/iterations" `
+            -Method 'POST' -Body @{ id = $iterRoot.identifier } | Out-Null
+    } catch {
+        if ($_ -notmatch 'already exists|duplicate|400') { throw }
+    }
+
+    # Set it as the default backlog iteration
+    Invoke-AdoRest -OrgUrl $OrgUrl `
+        -Path "$Project/$encodedTeam/_apis/work/teamsettings" `
+        -Method 'PATCH' -Body @{ backlogIteration = @{ id = $iterRoot.identifier } } | Out-Null
 }
 
 function Get-AdoTeamAreaConfig {
@@ -458,4 +475,104 @@ function Get-AdoTeamList {
         if ($team.name) { $teams[$team.name] = $team.id }
     }
     return $teams
+}
+
+# ─── Iteration paths (REST) ───────────────────────────────────────────────────
+
+function Test-AdoIterationPath {
+    <# Returns $true if an iteration path exists. Same pattern as Test-AdoAreaPath. #>
+    [CmdletBinding()]
+    param([string]$OrgUrl, [string]$Project, [string]$ResolvedPath)
+    $segments = $ResolvedPath.TrimStart('\') -split '\\'
+    if ($segments.Count -le 1) { return $true }
+    $subPath = ($segments[1..($segments.Count - 1)] |
+        ForEach-Object { [Uri]::EscapeDataString($_) }) -join '/'
+    try {
+        Invoke-AdoRest -OrgUrl $OrgUrl `
+            -Path "$Project/_apis/wit/classificationnodes/iterations/$subPath" | Out-Null
+        return $true
+    } catch {
+        if ($_ -match '404|Not Found|is not recognized|TreeNodeNotFoundException') { return $false }
+        throw
+    }
+}
+
+function New-AdoIterationPath {
+    <#
+        .SYNOPSIS
+        Creates an iteration classification node at the given resolved path.
+        Optionally sets startDate / endDate attributes (for sprint nodes).
+        Idempotent: silently succeeds if the node already exists.
+    #>
+    [CmdletBinding()]
+    param(
+        [string]$OrgUrl,
+        [string]$Project,
+        [string]$ResolvedPath,   # e.g. \Odyssey\2026\S1\S1-W1
+        [string]$StartDate = '', # ISO 8601 e.g. 2026-02-02T00:00:00Z
+        [string]$EndDate   = ''
+    )
+    $segments = $ResolvedPath.TrimStart('\') -split '\\'
+    if ($segments.Count -lt 2) { return }   # project root — never create
+
+    $name       = $segments[-1]
+    $parentSegs = if ($segments.Count -gt 2) { $segments[1..($segments.Count - 2)] } else { @() }
+    $parentPath = if ($parentSegs.Count -gt 0) {
+        ($parentSegs | ForEach-Object { [Uri]::EscapeDataString($_) }) -join '/'
+    } else { '' }
+
+    $apiPath = if ($parentPath) {
+        "$Project/_apis/wit/classificationnodes/iterations/$parentPath"
+    } else {
+        "$Project/_apis/wit/classificationnodes/iterations"
+    }
+
+    $body = @{ name = $name }
+    if ($StartDate -and $EndDate) {
+        $body['attributes'] = @{ startDate = $StartDate; finishDate = $EndDate }
+    }
+
+    try {
+        Invoke-AdoRest -OrgUrl $OrgUrl -Path $apiPath -Method 'POST' -Body $body | Out-Null
+    } catch {
+        if ($_ -notmatch 'already exists|duplicate|TF201020') {
+            throw "Failed to create iteration '$ResolvedPath': $_"
+        }
+    }
+}
+
+function Get-AdoIterationId {
+    <# Returns the GUID (identifier) of an iteration classification node. #>
+    [CmdletBinding()]
+    param([string]$OrgUrl, [string]$Project, [string]$ResolvedPath)
+    $segments = $ResolvedPath.TrimStart('\') -split '\\'
+    if ($segments.Count -le 1) { throw "Cannot get ID for project root iteration." }
+    $subPath = ($segments[1..($segments.Count - 1)] |
+        ForEach-Object { [Uri]::EscapeDataString($_) }) -join '/'
+    $node = Invoke-AdoRest -OrgUrl $OrgUrl -Path "$Project/_apis/wit/classificationnodes/iterations/$subPath"
+    return $node.identifier
+}
+
+function Get-AdoTeamIterationSet {
+    <# Returns a hashtable of iteration GUID -> $true for a team's current iteration list. #>
+    [CmdletBinding()]
+    param([string]$OrgUrl, [string]$Project, [string]$Team)
+    $set     = @{}
+    $encoded = [Uri]::EscapeDataString($Team)
+    $data    = Invoke-AdoRest -OrgUrl $OrgUrl -Path "$Project/$encoded/_apis/work/teamsettings/iterations"
+    foreach ($i in @($data.value)) { if ($i.id) { $set[$i.id] = $true } }
+    return $set
+}
+
+function Add-AdoTeamIteration {
+    <# Adds an iteration (by GUID) to a team's iteration list. Idempotent. #>
+    [CmdletBinding()]
+    param([string]$OrgUrl, [string]$Project, [string]$Team, [string]$IterationId)
+    $encoded = [Uri]::EscapeDataString($Team)
+    try {
+        Invoke-AdoRest -OrgUrl $OrgUrl -Path "$Project/$encoded/_apis/work/teamsettings/iterations" `
+            -Method 'POST' -Body @{ id = $IterationId } | Out-Null
+    } catch {
+        if ($_ -notmatch 'already exists|duplicate') { throw }
+    }
 }

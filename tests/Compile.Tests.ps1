@@ -73,4 +73,29 @@ Describe 'Compile stage' {
         $root = $script:resolved.teams | Where-Object name -eq 'Odyssey'
         ($root.securityGroups.ado) | Should -Contain 'Odyssey-Readers'
     }
+
+    It 'generates iteration paths from cadence.yaml' {
+        $script:resolved.iterations | Should -Not -BeNullOrEmpty
+        $script:resolved.iterations.paths.Count | Should -BeGreaterThan 10
+    }
+
+    It 'generates S1-W1 of 2026 on the correct dates' {
+        $s1w1 = $script:resolved.iterations.paths | Where-Object path -eq '\Odyssey\2026\S1\S1-W1'
+        $s1w1 | Should -Not -BeNullOrEmpty
+        $s1w1.startDate | Should -Be '2026-02-02T00:00:00Z'
+        $s1w1.endDate   | Should -Be '2026-02-20T00:00:00Z'
+    }
+
+    It 'generates shortened final sprint S1-W6 of 2026 (2-week sprint)' {
+        $s1w6 = $script:resolved.iterations.paths | Where-Object path -eq '\Odyssey\2026\S1\S1-W6'
+        $s1w6 | Should -Not -BeNullOrEmpty
+        $s1w6.startDate | Should -Be '2026-05-18T00:00:00Z'
+        $s1w6.endDate   | Should -Be '2026-05-29T00:00:00Z'
+    }
+
+    It 'chains S2-W1 of 2026 starting the Monday after S1-W6 ends' {
+        $s2w1 = $script:resolved.iterations.paths | Where-Object path -eq '\Odyssey\2026\S2\S2-W1'
+        $s2w1 | Should -Not -BeNullOrEmpty
+        $s2w1.startDate | Should -Be '2026-06-01T00:00:00Z'
+    }
 }

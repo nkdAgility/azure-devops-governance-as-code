@@ -42,6 +42,13 @@ function Import-GovernanceSource {
     $stream = [System.IO.MemoryStream]::new($bytes)
     $hash   = (Get-FileHash -InputStream $stream -Algorithm SHA256).Hash.ToLowerInvariant()
 
+    # cadence.yaml: optional iteration cadence config.
+    $cadencePath = Join-Path $ProgramPath 'cadence.yaml'
+    $cadence     = $null
+    if (Test-Path $cadencePath) {
+        $cadence = ConvertFrom-Yaml (Get-Content -Path $cadencePath -Raw)
+    }
+
     # team-ids.yaml: auto-maintained state file mapping codePath -> ADO team GUID.
     # Allows teams to be found by stable codePath even after a rename.
     $teamIdsPath = Join-Path $ProgramPath 'team-ids.yaml'
@@ -59,6 +66,7 @@ function Import-GovernanceSource {
         Access       = $access
         Members      = $members
         Hash         = $hash
+        Cadence      = $cadence
         TeamIds      = $teamIds
         TeamIdsPath  = $teamIdsPath
     }

@@ -127,6 +127,8 @@ function Invoke-GovernanceReconcile {
                 try {
                     $newId = New-AdoTeam -OrgUrl $OrgUrl -Project $project -Name $team.name
                     & $rCreated "team: $($team.name)"
+                    # Initialise iteration defaults immediately so area config PATCH succeeds
+                    Initialize-AdoTeamDefaults -OrgUrl $OrgUrl -Project $project -Team $team.name
                     $TeamIds[$team.codePath] = $newId
                     $liveTeams[$team.name]   = $newId
                     $liveTeamNames.Add($team.name) | Out-Null
@@ -335,6 +337,84 @@ function Invoke-GovernanceReconcile {
                 $findings.Add("MISSING pipeline folder: $($folder.path)")
                 if ($Mode -eq 'WhatIf') { & $rWould "create folder: $($folder.path)" }
                 else                     { & $rMissing "folder: $($folder.path)" }
+            }
+        }
+    }
+
+    # ── 6. Iteration paths ────────────────────────────────────────────────────
+    if ($Resolved.iterations -and $Resolved.iterations.paths) {
+        Write-Host "`n--- Iteration paths ---" -ForegroundColor Cyan
+
+        # Parents must exist before children; sort by depth.
+        $iterPaths = @($Resolved.iterations.paths | Sort-Object { ($_.path -split '\\').Count })
+        foreach ($iter in $iterPaths) {
+            $exists = Test-AdoIterationPath -OrgUrl $OrgUrl -Project $project -ResolvedPath $iter.path
+            if ($exists) {
+                & $rOk "iter: $($iter.path)"
+            } else {
+                if ($doFix) {
+                    try {
+                        New-AdoIterationPath -OrgUrl $OrgUrl -Project $project `
+                            -ResolvedPath $iter.path -StartDate $iter.startDate -EndDate $iter.endDate
+                        & $rCreated "iter: $($iter.path)"
+                    } catch {
+                        $findings.Add("ERROR creating iteration '$($iter.path)': $_")
+                        & $rError "create iteration '$($iter.path)': $_"
+                    }
+                } else {
+                    $findings.Add("MISSING iteration: $($iter.path)")
+                    if ($Mode -eq 'WhatIf') { & $rWould "create iteration: $($iter.path)" }
+                    else                     { & $rMissing "iteration: $($iter.path)" }
+                }
+            }
+        }
+    }
+
+    # ── 7. Team iteration scope ───────────────────────────────────────────────
+    if ($Resolved.iterations -and $Resolved.iterations.config -and $doFix) {
+        Write-Host "`n--- Team iteration scope ---" -ForegroundColor Cyan
+
+        $itCfg   = $Resolved.iterations.config
+        $progRoot = $Resolved.iterations.programRoot
+        $calendar = Get-IterationCalendar -Cadence @{ iterations = $itCfg } -ProgramRoot $progRoot
+
+        $tBack    = if ($itCfg.teamDefaults.sprints.back)         { [int]$itCfg.teamDefaults.sprints.back }         else { 10 }
+        $tFwd     = if ($itCfg.teamDefaults.sprints.forward)      { [int]$itCfg.teamDefaults.sprints.forward }      else { 10 }
+        $pBack    = if ($itCfg.portfolioDefaults.seasons.back)    { [int]$itCfg.portfolioDefaults.seasons.back }    else { 3 }
+        $pFwd     = if ($itCfg.portfolioDefaults.seasons.forward) { [int]$itCfg.portfolioDefaults.seasons.forward } else { 3 }
+
+        # Cache iteration path -> GUID to avoid repeated API calls across teams
+        $iterIdCache = @{}
+
+        foreach ($team in ($Resolved.teams | Where-Object { $_.scope -ne 'future' })) {
+            $isPortfolio = ($team.kind -eq 'portfolio' -or $team.kind -eq 'product')
+            $scopePaths  = if ($isPortfolio) {
+                Get-InScopeSeasonPaths -Calendar $calendar -Back $pBack -Forward $pFwd
+            } else {
+                Get-InScopeSprintPaths -Calendar $calendar -Back $tBack -Forward $tFwd
+            }
+            if ($scopePaths.Count -eq 0) { continue }
+
+            try {
+                $currentIds = Get-AdoTeamIterationSet -OrgUrl $OrgUrl -Project $project -Team $team.name
+                $added = 0
+                foreach ($iterPath in $scopePaths) {
+                    $guid = if ($iterIdCache.ContainsKey($iterPath)) { $iterIdCache[$iterPath] }
+                            else {
+                                try { $id = Get-AdoIterationId -OrgUrl $OrgUrl -Project $project -ResolvedPath $iterPath
+                                      $iterIdCache[$iterPath] = $id; $id
+                                } catch { $null }
+                            }
+                    if (-not $guid) { continue }
+                    if (-not $currentIds.ContainsKey($guid)) {
+                        Add-AdoTeamIteration -OrgUrl $OrgUrl -Project $project -Team $team.name -IterationId $guid
+                        $added++
+                    }
+                }
+                if ($added -gt 0) { & $rFixed "team: $($team.name)  ($added iteration(s) added to scope)" }
+                else               { & $rOk    "team: $($team.name)  (iteration scope current)" }
+            } catch {
+                & $rError "iteration scope for '$($team.name)': $_"
             }
         }
     }

@@ -12,7 +12,7 @@ function Invoke-GovernanceBuild {
 
     $program  = Split-Path $ProgramPath -Leaf
     $source   = Import-GovernanceSource -ProgramPath $ProgramPath
-    $resolved = Resolve-Governance -Manifest $source.Manifest -Source $source.Hierarchy -Access $source.Access -Members $source.Members -SourceHash $source.Hash
+    $resolved = Resolve-Governance -Manifest $source.Manifest -Source $source.Hierarchy -Access $source.Access -Members $source.Members -SourceHash $source.Hash -Cadence $source.Cadence
 
     $issues = Test-ResolvedGovernance -Resolved $resolved
     if ($issues.Count -gt 0) {
@@ -23,8 +23,9 @@ function Invoke-GovernanceBuild {
     $written = Write-ResolvedGovernance -Resolved $resolved -OutputPath $OutputPath
 
     Write-Host "Compiled '$program' -> $written" -ForegroundColor Green
-    Write-Host ("  {0} area paths, {1} teams, {2} repos, {3} pipeline folders" -f `
-        $resolved.areaPaths.Count, $resolved.teams.Count, $resolved.repos.Count, $resolved.pipelineFolders.Count)
+    $iterCount = if ($resolved.iterations) { $resolved.iterations.paths.Count } else { 0 }
+    Write-Host ("  {0} area paths, {1} teams, {2} repos, {3} pipeline folders, {4} iteration paths" -f `
+        $resolved.areaPaths.Count, $resolved.teams.Count, $resolved.repos.Count, $resolved.pipelineFolders.Count, $iterCount)
 
     return $written
 }

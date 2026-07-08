@@ -83,7 +83,8 @@ function Resolve-Governance {
         [Parameter(Mandatory)][object]$Source,
         [Parameter(Mandatory)][object]$Access,
         [Parameter(Mandatory)][string]$SourceHash,
-        [hashtable]$Members = @{}
+        [hashtable]$Members = @{},
+        [object]$Cadence    = $null   # optional cadence.yaml content for iteration generation
     )
 
     $ctx = @{
@@ -231,6 +232,16 @@ function Resolve-Governance {
             accessLevel = $Access.stakeholders.accessLevel
             ado         = $Access.stakeholders.ado
             scope       = $Access.stakeholders.scope
+        }
+    }
+
+    # Iteration calendar (optional — only if cadence.yaml is present)
+    if ($Cadence -and $Cadence.iterations) {
+        $calendar = Get-IterationCalendar -Cadence $Cadence -ProgramRoot $root
+        $resolved['iterations'] = [ordered]@{
+            programRoot = $root
+            config      = $Cadence.iterations
+            paths       = ConvertTo-FlatIterationPaths -Calendar $calendar
         }
     }
 

@@ -27,6 +27,28 @@ If a manifest's `accessToken` resolves to a URL, `Set-AdoAuth` will throw immedi
 
 ---
 
+## Iteration cadence
+
+Iteration paths are generated from `programs/<name>/cadence.yaml` and stored in the resolved model. The hierarchy is `Year → Season → Sprint`.
+
+**Cadence rules (Odyssey):**
+- Execution year starts on the **first Monday of February**
+- Seasons: **S1** (Feb–May), **S2** (Jun–Oct), **S3** (Oct–Jan)
+- Standard sprint: **3 working weeks** = 19 calendar days (Mon–Fri)
+- Final sprint of S1 and S3 is shortened to **2 weeks** (12 calendar days) for boundary alignment
+- S2 has 6 standard sprints
+
+**Scope defaults (configurable in `cadence.yaml`):**
+
+| Team type | Scope |
+|---|---|
+| Delivery team | 10 sprints back, 10 sprints forward |
+| Portfolio team | 3 seasons back, 3 seasons forward |
+
+To change defaults, edit `cadence.yaml` under the relevant program folder. The `yearHorizon` field controls how many execution years ahead to generate.
+
+---
+
 ## What this system is
 
 A compliance engine for Azure DevOps. The YAML files in `programs/` are the **single source of truth**. Everything in a live ADO organisation must match them exactly. Any deviation — missing, extra, or misconfigured — is non-compliant and must be flagged.
