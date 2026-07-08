@@ -32,16 +32,18 @@ function Add-TeamNode {
         [Parameter(Mandatory)][object]$Node,
         [Parameter(Mandatory)][string]$ParentPath,
         [Parameter(Mandatory)][string]$ParentTeamName,
+        [Parameter(Mandatory)][string]$QualifiedParentName,
         [Parameter(Mandatory)][string]$ParentCodePath,
         [Parameter(Mandatory)][bool]$IsFirstLevel,
         [Parameter(Mandatory)][string]$ProgramRoot,
         [Parameter(Mandatory)][hashtable]$Ctx
     )
 
-    $path        = "$ParentPath\$($Node.name)"
-    $codePath    = "$ParentCodePath-$($Node.short)"
-    $children    = @($Node.teams | Where-Object { $null -ne $_ })
-    $hasChildren = $children.Count -gt 0
+    $path           = "$ParentPath\$($Node.name)"
+    $codePath       = "$ParentCodePath-$($Node.short)"
+    $qualifiedName  = "$QualifiedParentName · $($Node.name)"   # e.g. 'Portal · Foundation'
+    $children       = @($Node.teams | Where-Object { $null -ne $_ })
+    $hasChildren    = $children.Count -gt 0
 
     $area = [ordered]@{ path = $path; kind = 'team' }
     if ($Node.short) { $area.short = $Node.short; $area.code = $codePath }
@@ -53,7 +55,7 @@ function Add-TeamNode {
     else {
         $folder = if ($IsFirstLevel) { $path.Substring($ProgramRoot.Length) } else { $null }
         $Ctx.Teams.Add([ordered]@{
-            name            = $Node.name
+            name            = $qualifiedName
             short           = $Node.short
             kind            = 'team'
             parent          = $ParentTeamName
@@ -65,7 +67,7 @@ function Add-TeamNode {
     }
 
     foreach ($child in $children) {
-        Add-TeamNode -Node $child -ParentPath $path -ParentTeamName $Node.name -ParentCodePath $codePath -IsFirstLevel $false -ProgramRoot $ProgramRoot -Ctx $Ctx
+        Add-TeamNode -Node $child -ParentPath $path -ParentTeamName $qualifiedName -QualifiedParentName $qualifiedName -ParentCodePath $codePath -IsFirstLevel $false -ProgramRoot $ProgramRoot -Ctx $Ctx
     }
 }
 
@@ -163,7 +165,7 @@ function Resolve-Governance {
             }
             else {
                 foreach ($node in $items) {
-                    Add-TeamNode -Node $node -ParentPath $bandPath -ParentTeamName $product.name -ParentCodePath $product.short -IsFirstLevel $true -ProgramRoot $root -Ctx $ctx
+                    Add-TeamNode -Node $node -ParentPath $bandPath -ParentTeamName $product.name -QualifiedParentName $product.name -ParentCodePath $product.short -IsFirstLevel $true -ProgramRoot $root -Ctx $ctx
                 }
             }
         }

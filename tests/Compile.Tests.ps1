@@ -27,12 +27,12 @@ Describe 'Compile stage' {
     }
 
     It 'creates a team per owning node (Foundation)' {
-        ($script:resolved.teams | Where-Object name -eq 'Foundation') | Should -Not -BeNullOrEmpty
+        ($script:resolved.teams | Where-Object name -eq 'Portal · Foundation') | Should -Not -BeNullOrEmpty
     }
 
     It 'nests sub-teams (Open API under Foundation)' {
-        $openApi = $script:resolved.teams | Where-Object name -eq 'Open API'
-        $openApi.parent | Should -Be 'Foundation'
+        $openApi = $script:resolved.teams | Where-Object name -eq 'Portal · Foundation · Open API'
+        $openApi.parent | Should -Be 'Portal · Foundation'
         $openApi.defaultAreaPath | Should -Be '\Odyssey\Portal\Platform\Foundation\Open API'
     }
 
