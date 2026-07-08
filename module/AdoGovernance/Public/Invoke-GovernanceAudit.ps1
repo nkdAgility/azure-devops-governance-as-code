@@ -1,8 +1,12 @@
 function Invoke-GovernanceAudit {
     <#
         .SYNOPSIS
-        Read-only compliance report — naming violations, drift, orphan teams /
-        repos, and direct (non-group) permission grants. (Not yet implemented in v0.1.)
+        Builds the resolved model then runs the compliance loop in Audit mode:
+        every governed resource is checked and every deviation is reported.
+        No changes are made to the live Azure DevOps organisation.
+
+        Returns a non-terminating error and exits non-zero when findings exist,
+        so CI pipelines can detect non-compliance.
     #>
     [CmdletBinding()]
     param(
@@ -11,14 +15,20 @@ function Invoke-GovernanceAudit {
         [string]$Org
     )
 
-    if (-not (Test-Path $ResolvedPath)) {
-        throw "No resolved file at $ResolvedPath. Run 'build.ps1 build' first."
+    # Always build first — audit must reflect the latest authored config.
+    Invoke-GovernanceBuild -ProgramPath $ProgramPath -OutputPath $ResolvedPath | Out-Null
+
+    $manifest  = (Import-GovernanceSource -ProgramPath $ProgramPath).Manifest
+    $targetOrg = if ($Org) { $Org } else { $manifest.org }
+    $token     = Resolve-AccessToken $manifest.accessToken
+    if (-not $token) {
+        throw "Access token not found. Set the environment variable referenced by manifest.accessToken."
     }
+    Set-AdoAuth $token
 
-    $manifest   = (Import-GovernanceSource -ProgramPath $ProgramPath).Manifest
-    $targetOrg  = if ($Org) { $Org } else { $manifest.org }
-    $token      = Resolve-AccessToken $manifest.accessToken
-    $tokenState = if ($token) { 'present' } else { 'MISSING' }
+    $orgUrl   = ConvertTo-AdoOrgUrl -Org $targetOrg
+    $resolved = ConvertFrom-Yaml (Get-Content $ResolvedPath -Raw)
 
-    Write-Warning "audit: not yet implemented. Would audit org '$targetOrg' against '$ResolvedPath' (token: $tokenState)."
+    Write-Host "Auditing '$($resolved.program)' in $orgUrl" -ForegroundColor Cyan
+    Invoke-GovernanceReconcile -Resolved $resolved -OrgUrl $orgUrl -Mode 'Audit'
 }
