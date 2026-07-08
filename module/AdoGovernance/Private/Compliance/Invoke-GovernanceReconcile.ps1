@@ -21,7 +21,8 @@ function Invoke-GovernanceReconcile {
         [Parameter(Mandatory)][object]$Resolved,
         [Parameter(Mandatory)][string]$OrgUrl,
         [ValidateSet('Audit', 'Apply', 'WhatIf')]
-        [string]$Mode = 'Audit'
+        [string]$Mode = 'Audit',
+        [string]$ReportPath = ''
     )
 
     $findings = [System.Collections.Generic.List[string]]::new()
@@ -41,13 +42,17 @@ function Invoke-GovernanceReconcile {
     # ── 1. Area paths ─────────────────────────────────────────────────────────
     Write-Host "`n--- Area paths ---" -ForegroundColor Cyan
 
-    $liveAreas    = Get-AdoAreaPathSubtree -OrgUrl $OrgUrl -Project $project
     $desiredAreas = @($Resolved.areaPaths | Where-Object { $_.scope -ne 'future' })
     $desiredPaths = @($desiredAreas | ForEach-Object { $_.path }) |
                     Sort-Object { ($_ -split '\\').Count }   # parents before children
 
+    # Check each desired path individually — the bulk tree API ($depth) does not
+    # reliably return children, so per-path REST calls are used for MISSING detection.
+    $liveAreas = @{}
     foreach ($path in $desiredPaths) {
-        if ($liveAreas.ContainsKey($path)) {
+        $exists = Test-AdoAreaPath -OrgUrl $OrgUrl -Project $project -ResolvedPath $path
+        if ($exists) {
+            $liveAreas[$path] = $true
             & $rOk $path
         } else {
             $findings.Add("MISSING area path: $path")
@@ -55,20 +60,25 @@ function Invoke-GovernanceReconcile {
                 try {
                     New-AdoAreaPath -OrgUrl $OrgUrl -Project $project -ResolvedPath $path
                     & $rCreated "area path: $path"
-                    $liveAreas[$path] = $true   # keep local state current
+                    $liveAreas[$path] = $true
                 } catch { & $rError "create area path '$path': $_" }
             } elseif ($Mode -eq 'WhatIf') { & $rWould "create area path: $path"
             } else                         { & $rMissing "area path: $path" }
         }
     }
 
-    # Orphan area paths — exist in ADO but absent from the resolved model
-    foreach ($livePath in ($liveAreas.Keys | Sort-Object)) {
-        if ($livePath -notin $desiredPaths) {
-            $findings.Add("AUDIT EXCEPTION area path: $livePath")
-            & $rOrphan "area path: $livePath"
+    # Audit exceptions — use bulk tree fetch (best-effort; skipped if API returns no children)
+    try {
+        $bulkAreas = Get-AdoAreaPathSubtree -OrgUrl $OrgUrl -Project $project
+        if ($bulkAreas.Count -gt 1) {   # more than just the root — bulk fetch worked
+            foreach ($livePath in ($bulkAreas.Keys | Sort-Object)) {
+                if ($livePath -notin $desiredPaths) {
+                    $findings.Add("AUDIT EXCEPTION area path: $livePath")
+                    & $rOrphan "area path: $livePath"
+                }
+            }
         }
-    }
+    } catch { Write-Verbose "Area path audit exception check skipped: $_" }
 
     # ── 2. Teams ──────────────────────────────────────────────────────────────
     Write-Host "`n--- Teams ---" -ForegroundColor Cyan
@@ -247,6 +257,10 @@ function Invoke-GovernanceReconcile {
     }
 
     # ── Summary ───────────────────────────────────────────────────────────────
+    $exceptions = @($findings | Where-Object { $_ -like 'AUDIT EXCEPTION*' })
+    $missing    = @($findings | Where-Object { $_ -like 'MISSING*' })
+    $drift      = @($findings | Where-Object { $_ -notlike 'AUDIT EXCEPTION*' -and $_ -notlike 'MISSING*' })
+
     Write-Host ''
     if ($findings.Count -eq 0) {
         Write-Host "COMPLIANT — zero findings." -ForegroundColor Green
@@ -257,6 +271,51 @@ function Invoke-GovernanceReconcile {
             default  { 'found' }
         }
         Write-Host "NON-COMPLIANT — $($findings.Count) finding(s) $suffix." -ForegroundColor Red
+
+        if ($missing.Count -gt 0) {
+            Write-Host "`n  Missing ($($missing.Count)):" -ForegroundColor Red
+            $missing | ForEach-Object { Write-Host "    • $_" -ForegroundColor Red }
+        }
+        if ($drift.Count -gt 0) {
+            Write-Host "`n  Drift ($($drift.Count)):" -ForegroundColor Red
+            $drift | ForEach-Object { Write-Host "    • $_" -ForegroundColor Red }
+        }
+        if ($exceptions.Count -gt 0) {
+            Write-Host "`n  Audit exceptions — exist in ADO but not in config ($($exceptions.Count)):" -ForegroundColor Magenta
+            $exceptions | ForEach-Object { Write-Host "    • $_" -ForegroundColor Magenta }
+        }
+    }
+
+    # ── Write report file ─────────────────────────────────────────────────────
+    if ($ReportPath) {
+        $reportDir = Split-Path $ReportPath -Parent
+        if ($reportDir -and -not (Test-Path $reportDir)) {
+            New-Item -ItemType Directory -Path $reportDir -Force | Out-Null
+        }
+        $lines = [System.Collections.Generic.List[string]]::new()
+        $lines.Add("Governance audit report")
+        $lines.Add("Program  : $project")
+        $lines.Add("Org      : $OrgUrl")
+        $lines.Add("Mode     : $Mode")
+        $lines.Add("Generated: $(Get-Date -Format 'o')")
+        $lines.Add("Findings : $($findings.Count)")
+        $lines.Add('')
+        foreach ($section in @(
+            @{ label = 'MISSING'; items = $missing },
+            @{ label = 'DRIFT';   items = $drift },
+            @{ label = 'AUDIT EXCEPTIONS (exist in ADO but not in config)'; items = $exceptions }
+        )) {
+            if ($section.items.Count -eq 0) { continue }
+            $lines.Add("$($section.label) ($($section.items.Count)):")
+            $section.items | ForEach-Object { $lines.Add("  - $_") }
+            $lines.Add('')
+        }
+        if ($findings.Count -eq 0) { $lines.Add('COMPLIANT') } else { $lines.Add('NON-COMPLIANT') }
+        Set-Content -Path $ReportPath -Value $lines -Encoding utf8
+        Write-Host "`nReport written to: $ReportPath" -ForegroundColor Cyan
+    }
+
+    if ($findings.Count -gt 0 -and $Mode -eq 'Audit') {
         Write-Error "Governance compliance: $($findings.Count) finding(s) $suffix."
     }
 
