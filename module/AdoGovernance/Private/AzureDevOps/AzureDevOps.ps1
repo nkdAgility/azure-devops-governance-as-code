@@ -335,3 +335,59 @@ function New-AdoPipelineFolder {
         --path $Path --output none
     if ($LASTEXITCODE -ne 0) { throw "Failed to create pipeline folder '$Path'." }
 }
+
+# ─── Bulk read helpers (used by audit) ───────────────────────────────────────
+
+function Get-AdoAreaPathSubtree {
+    <#
+        .SYNOPSIS
+        Returns a hashtable of every area path in the governance-owned project tree.
+        Uses a targeted REST call scoped to the project, not the entire org, so
+        the response is bounded by the project's own area nodes.
+        Paths are in the same format as the resolved model: '\Project\Node\...'.
+    #>
+    [CmdletBinding()]
+    param(
+        [string]$OrgUrl,
+        [string]$Project,
+        [int]$Depth = 10
+    )
+    $set  = @{}
+    $data = Invoke-AdoRest -OrgUrl $OrgUrl `
+        -Path "$Project/_apis/wit/classificationnodes/areas?`$depth=$Depth"
+
+    $stack = [System.Collections.Generic.Stack[object]]::new()
+    $stack.Push([pscustomobject]@{ node = $data; prefix = '' })
+    while ($stack.Count) {
+        $item = $stack.Pop()
+        $path = "$($item.prefix)\$($item.node.name)"
+        $set[$path] = $true
+        foreach ($child in @($item.node.children)) {
+            if ($null -ne $child) {
+                $stack.Push([pscustomobject]@{ node = $child; prefix = $path })
+            }
+        }
+    }
+    return $set
+}
+
+function Get-AdoTeamList {
+    <#
+        .SYNOPSIS
+        Returns a list of all team names for a project via paginated REST calls.
+        Safe on large projects — fetches 100 at a time, never loads the full payload.
+    #>
+    [CmdletBinding()]
+    param([string]$OrgUrl, [string]$Project)
+    $names    = [System.Collections.Generic.List[string]]::new()
+    $pageSkip = 0
+    $pageTop  = 100
+    do {
+        $data  = Invoke-AdoRest -OrgUrl $OrgUrl `
+            -Path "_apis/projects/$Project/teams?`$skip=$pageSkip&`$top=$pageTop"
+        $batch = @($data.value)
+        foreach ($t in $batch) { $names.Add($t.name) }
+        $pageSkip += $pageTop
+    } while ($batch.Count -eq $pageTop)
+    return $names
+}
