@@ -618,6 +618,7 @@ function Invoke-GovernanceReconcile {
                 if ($added -gt 0) { & $rFixed "team: $($team.name)  ($added iteration(s) added to scope)" }
                 else               { & $rOk    "team: $($team.name)  (iteration scope current)" }
             } catch {
+                $findings.Add("ERROR setting iteration scope for '$($team.name)': $_")
                 & $rError "iteration scope for '$($team.name)': $_"
             }
         }
@@ -676,7 +677,10 @@ function Invoke-GovernanceReconcile {
                     if ($Mode -eq 'WhatIf') { & $rWould "correct backlog levels for team: $($team.name)" }
                     else                     { & $rDrift "team: $($team.name)  backlog levels wrong" }
                 }
-            } catch { & $rError "read backlog levels for '$($team.name)': $_" }
+            } catch {
+                $findings.Add("ERROR reading backlog levels for '$($team.name)': $_")
+                & $rError "read backlog levels for '$($team.name)': $_"
+            }
         }
     }
 

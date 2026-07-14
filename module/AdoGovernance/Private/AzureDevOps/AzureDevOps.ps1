@@ -765,7 +765,10 @@ function Get-AdoTeamIterationSet {
     try {
         $data = Invoke-AdoRest -OrgUrl $OrgUrl -Path $apiPath
     } catch {
-        if ($_ -match 'TF400497|backlog iteration') {
+        # Invoke-RestMethod puts the JSON response body in ErrorDetails.Message;
+        # $_.ToString() only has the short HTTP-status line, so check both.
+        $errText = if ($_.ErrorDetails -and $_.ErrorDetails.Message) { $_.ErrorDetails.Message } else { "$_" }
+        if ($errText -match 'TF400497|backlog iteration') {
             # Backlog iteration is invalid — reinitialise and retry once.
             Initialize-AdoTeamDefaults -OrgUrl $OrgUrl -Project $Project -Team $Team
             $data = Invoke-AdoRest -OrgUrl $OrgUrl -Path $apiPath
