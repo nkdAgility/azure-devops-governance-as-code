@@ -270,10 +270,12 @@ function Initialize-AdoTeamDefaults {
         if ($yearNode.identifier) { $backlogId = $yearNode.identifier }
     } catch { <# year node not created yet — fall back to root #> }
 
-    # Set it as the default backlog iteration
+    # Set it as the default backlog iteration.
+    # ADO requires a bare GUID string for backlogIteration — sending a nested {id:...}
+    # object is silently accepted (HTTP 200) but the value is NOT updated.
     Invoke-AdoRest -OrgUrl $OrgUrl `
         -Path "$Project/$encodedTeam/_apis/work/teamsettings" `
-        -Method 'PATCH' -Body @{ backlogIteration = @{ id = $backlogId } } | Out-Null
+        -Method 'PATCH' -Body @{ backlogIteration = $backlogId } | Out-Null
 }
 
 function Get-AdoTeamAreaConfig {
