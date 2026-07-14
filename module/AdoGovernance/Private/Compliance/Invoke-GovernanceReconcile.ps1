@@ -353,15 +353,19 @@ function Invoke-GovernanceReconcile {
     # ── 7. Pipeline folders ────────────────────────────────────────────────────────
     Write-Host "`n--- Pipeline folders ---" -ForegroundColor Cyan
 
-    $liveFolders = Get-AdoPipelineFolderSet -OrgUrl $OrgUrl -Project $project
+    $liveFolders   = Get-AdoPipelineFolderSet -OrgUrl $OrgUrl -Project $project
+    $projectId     = $null   # lazy-loaded once for ACL security token construction
+    $identityCache = @{}     # subjectDescriptor -> securityIdentityDescriptor
+
     foreach ($folder in @($Resolved.pipelineFolders | Where-Object { $_ })) {
-        if ($liveFolders.ContainsKey($folder.path)) {
-            & $rOk "folder: $($folder.path)"
-        } else {
+        $folderExists = $liveFolders.ContainsKey($folder.path)
+
+        if (-not $folderExists) {
             if ($doFix) {
                 try {
                     New-AdoPipelineFolder -OrgUrl $OrgUrl -Project $project -Path $folder.path
                     & $rCreated "folder: $($folder.path)"
+                    $folderExists = $true
                 } catch {
                     $findings.Add("ERROR creating folder '$($folder.path)': $_")
                     & $rError "create folder '$($folder.path)': $_"
@@ -371,6 +375,96 @@ function Invoke-GovernanceReconcile {
                 if ($Mode -eq 'WhatIf') { & $rWould "create folder: $($folder.path)" }
                 else                     { & $rMissing "folder: $($folder.path)" }
             }
+        } else {
+            & $rOk "folder: $($folder.path)"
+        }
+
+        # ── ACL check ─────────────────────────────────────────────────────────
+        if (-not $folderExists) { continue }
+        $desiredAcl = @($folder.acl | Where-Object { $_ })
+        if ($desiredAcl.Count -eq 0) { continue }
+
+        # Lazy-load the project ID needed to build the security token
+        if (-not $projectId) {
+            $projectId = Get-AdoProjectId -OrgUrl $OrgUrl -Project $project
+            if (-not $projectId) {
+                & $rError "could not resolve project ID — skipping ACL checks for pipeline folders"
+                continue
+            }
+        }
+
+        try {
+            $liveAcl  = Get-AdoPipelineFolderAcl -OrgUrl $OrgUrl -ProjectId $projectId -FolderPath $folder.path
+            $aclDrift = [System.Collections.Generic.List[object]]::new()
+
+            foreach ($ace in $desiredAcl) {
+                # Resolve the graph subject descriptor for this group name
+                $subjectDesc = $liveGroups[$ace.group]
+                if (-not $subjectDesc) {
+                    $aclDrift.Add([ordered]@{
+                        message      = "DRIFT pipeline folder '$($folder.path)': group '$($ace.group)' not found in ADO"
+                        identityDesc = $null
+                        desiredBits  = 0
+                    })
+                    continue
+                }
+
+                # Resolve (and cache) the security identity descriptor
+                if (-not $identityCache.ContainsKey($subjectDesc)) {
+                    $identityCache[$subjectDesc] = Get-AdoGroupIdentityDescriptor `
+                        -OrgUrl $OrgUrl -SubjectDescriptor $subjectDesc
+                }
+                $identityDesc = $identityCache[$subjectDesc]
+                if (-not $identityDesc) {
+                    $aclDrift.Add([ordered]@{
+                        message      = "DRIFT pipeline folder '$($folder.path)': cannot resolve security identity for '$($ace.group)'"
+                        identityDesc = $null
+                        desiredBits  = 0
+                    })
+                    continue
+                }
+
+                $desiredBits = ConvertTo-PipelinePermissionBit -Permission $ace.permission
+                $actualBits  = if ($liveAcl.ContainsKey($identityDesc)) { [int]$liveAcl[$identityDesc] } else { 0 }
+                if (($actualBits -band $desiredBits) -ne $desiredBits) {
+                    $aclDrift.Add([ordered]@{
+                        message      = "DRIFT pipeline folder '$($folder.path)': '$($ace.group)' has allow=$actualBits, need bits $desiredBits"
+                        identityDesc = $identityDesc
+                        desiredBits  = $desiredBits
+                    })
+                }
+            }
+
+            if ($aclDrift.Count -eq 0) {
+                & $rOk "folder ACL: $($folder.path)"
+            } elseif ($doFix) {
+                $fixFailed = $false
+                foreach ($item in $aclDrift) {
+                    if (-not $item.identityDesc) {
+                        # Unresolvable group — always a finding
+                        $findings.Add($item.message)
+                        & $rError $item.message
+                        $fixFailed = $true
+                        continue
+                    }
+                    try {
+                        Set-AdoPipelineFolderAce -OrgUrl $OrgUrl -ProjectId $projectId `
+                            -FolderPath $folder.path -IdentityDescriptor $item.identityDesc `
+                            -AllowBits $item.desiredBits
+                    } catch {
+                        $findings.Add("ERROR setting ACL on '$($folder.path)' for identity '$($item.identityDesc)': $_")
+                        & $rError "set ACL '$($folder.path)': $_"
+                        $fixFailed = $true
+                    }
+                }
+                if (-not $fixFailed) { & $rFixed "folder ACL: $($folder.path)" }
+            } else {
+                foreach ($item in $aclDrift) { $findings.Add($item.message) }
+                if ($Mode -eq 'WhatIf') { & $rWould "correct folder ACL: $($folder.path)" }
+                else                     { & $rDrift "folder ACL: $($folder.path)" }
+            }
+        } catch {
+            & $rError "read ACL for '$($folder.path)': $_"
         }
     }
 

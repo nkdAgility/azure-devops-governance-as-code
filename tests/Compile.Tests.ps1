@@ -99,3 +99,28 @@ Describe 'Compile stage' {
         $s2w1.startDate | Should -Be '2026-06-01T00:00:00Z'
     }
 }
+
+Describe 'Pipeline folder ACL resolution' {
+
+    It 'maps read permission to correct bit mask' {
+        InModuleScope AdoGovernance {
+            ConvertTo-PipelinePermissionBit -Permission 'read' | Should -Be 1025
+        }
+    }
+
+    It 'maps Edit, Queue permission to correct bit mask' {
+        InModuleScope AdoGovernance {
+            ConvertTo-PipelinePermissionBit -Permission 'Edit, Queue' | Should -Be 3201
+        }
+    }
+
+    It 'throws on an unknown permission string' {
+        { InModuleScope AdoGovernance { ConvertTo-PipelinePermissionBit -Permission 'unknown' } } |
+            Should -Throw
+    }
+
+    It 'pipeline folder ACL contains reader group with read permission' {
+        $fnd = $script:resolved.pipelineFolders | Where-Object path -eq '\Portal\Platform\Foundation'
+        ($fnd.acl | Where-Object group -eq 'PTL-FND-Readers').permission | Should -Be 'read'
+    }
+}

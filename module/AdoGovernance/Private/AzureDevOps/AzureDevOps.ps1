@@ -425,6 +425,116 @@ function New-AdoPipelineFolder {
     if ($LASTEXITCODE -ne 0) { throw "Failed to create pipeline folder '$Path'." }
 }
 
+# ─── Pipeline folder ACLs (REST security API) ─────────────────────────────────
+
+$script:PipelineBuildNamespaceId = '2e9eb7ed-3c0a-47d4-87c1-0ffdd275fd87'
+
+function ConvertTo-PipelinePermissionBit {
+    <#
+        .SYNOPSIS
+        Converts a human-readable pipeline permission string from access.yaml into
+        the ADO Build-namespace allow-bit mask.
+
+        Supported values (from access.yaml roles.*.pipelines):
+          read         -> ViewBuilds(1) | ViewBuildDefinition(1024)
+          'Edit, Queue'-> ViewBuilds(1) | QueueBuilds(128) | ViewBuildDefinition(1024) | EditBuildDefinition(2048)
+    #>
+    [CmdletBinding()]
+    param([Parameter(Mandatory)][string]$Permission)
+    switch ($Permission.Trim()) {
+        'read'        { return 1025 }   # 1 + 1024
+        'Edit, Queue' { return 3201 }   # 1 + 128 + 1024 + 2048
+        default       { throw "Unknown pipeline permission string: '$Permission'" }
+    }
+}
+
+function Get-AdoGroupIdentityDescriptor {
+    <#
+        .SYNOPSIS
+        Converts an ADO graph subject descriptor (e.g. 'vssgp.Ym9...' from Get-AdoGroupSet)
+        into a security identity descriptor (e.g. 'Microsoft.TeamFoundation.Identity;S-1-9-...')
+        suitable for use in security ACL operations.
+        Returns $null when the identity cannot be resolved.
+    #>
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)][string]$OrgUrl,
+        [Parameter(Mandatory)][string]$SubjectDescriptor
+    )
+    $enc    = [Uri]::EscapeDataString($SubjectDescriptor)
+    # Use the VSSPS host for identity resolution (different subdomain from the main org URL)
+    $orgName = $OrgUrl.TrimEnd('/') -replace '^https?://dev\.azure\.com/', ''
+    $vsspsUrl = "https://vssps.dev.azure.com/$orgName"
+    try {
+        $result = Invoke-AdoRest -OrgUrl $vsspsUrl `
+            -Path "_apis/identities?subjectDescriptors=$enc&queryMembership=None"
+        $identity = @($result.value)[0]
+        return $identity.descriptor   # 'Microsoft.TeamFoundation.Identity;...'
+    } catch {
+        Write-Verbose "Get-AdoGroupIdentityDescriptor: failed for '$SubjectDescriptor': $_"
+        return $null
+    }
+}
+
+function Get-AdoPipelineFolderAcl {
+    <#
+        .SYNOPSIS
+        Returns a hashtable of securityIdentityDescriptor -> allowBits for the
+        named pipeline folder. Only the explicit (non-inherited) ACEs are returned.
+        Returns an empty hashtable when no ACL exists or on error.
+    #>
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)][string]$OrgUrl,
+        [Parameter(Mandatory)][string]$ProjectId,
+        [Parameter(Mandatory)][string]$FolderPath   # e.g. '\Portal\Platform\Foundation'
+    )
+    $clean = $FolderPath.TrimStart('\').Replace('\', '/')
+    $token = if ($clean) { "$ProjectId/$clean" } else { $ProjectId }
+    $tokenEnc = [Uri]::EscapeDataString($token)
+    $acl = @{}
+    try {
+        $result = Invoke-AdoRest -OrgUrl $OrgUrl `
+            -Path "_apis/accesscontrollists/$script:PipelineBuildNamespaceId`?token=$tokenEnc&includeExtendedInfo=false&recurse=false"
+        foreach ($list in @($result.value)) {
+            foreach ($prop in $list.acesDictionary.PSObject.Properties) {
+                $acl[$prop.Name] = [int]$prop.Value.allow
+            }
+        }
+    } catch {
+        Write-Verbose "Get-AdoPipelineFolderAcl: error reading ACL for token '$token': $_"
+    }
+    return $acl
+}
+
+function Set-AdoPipelineFolderAce {
+    <#
+        .SYNOPSIS
+        Grants the specified allow-bits to a security identity on a pipeline folder.
+        Uses merge=true so existing bits are OR-ed rather than replaced.
+    #>
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)][string]$OrgUrl,
+        [Parameter(Mandatory)][string]$ProjectId,
+        [Parameter(Mandatory)][string]$FolderPath,         # e.g. '\Portal\Platform\Foundation'
+        [Parameter(Mandatory)][string]$IdentityDescriptor, # security identity descriptor
+        [Parameter(Mandatory)][int]$AllowBits
+    )
+    $clean = $FolderPath.TrimStart('\').Replace('\', '/')
+    $token = if ($clean) { "$ProjectId/$clean" } else { $ProjectId }
+    $body = @{
+        token   = $token
+        merge   = $true
+        accessControlEntries = @(
+            @{ descriptor = $IdentityDescriptor; allow = $AllowBits; deny = 0 }
+        )
+    }
+    Invoke-AdoRest -OrgUrl $OrgUrl `
+        -Path "_apis/accesscontrolentries/$script:PipelineBuildNamespaceId" `
+        -Method 'POST' -Body $body | Out-Null
+}
+
 # ─── Bulk read helpers (used by audit) ───────────────────────────────────────
 
 function Get-AdoAreaPathSubtree {
