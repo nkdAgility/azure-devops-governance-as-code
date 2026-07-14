@@ -15,6 +15,14 @@ function Invoke-GovernanceReconcile {
           Apply  - check + fix. Findings = things that could not be fixed.
           WhatIf - check + report what would be fixed. No changes made.
 
+        Prune (opt-in, never on by default): in Apply mode, resources that exist
+        in ADO but not in the resolved model are DELETED instead of reported —
+        orphan teams, orphan area paths (work items reparented to the parent
+        node), orphan repos (soft-deleted to the recycle bin), and extra group
+        members. scope:future placeholders, the project default team/repo, and
+        iteration paths (ADR-005) are never pruned. In WhatIf mode prune shows
+        what would be deleted; Audit never deletes regardless.
+
         Returns a string array of remaining findings. Empty = fully compliant.
     #>
     [CmdletBinding()]
@@ -24,7 +32,8 @@ function Invoke-GovernanceReconcile {
         [ValidateSet('Audit', 'Apply', 'WhatIf')]
         [string]$Mode = 'Audit',
         [string]$ReportPath = '',
-        [hashtable]$TeamIds = @{}    # codePath -> ADO GUID; mutated in-place for caller to persist
+        [hashtable]$TeamIds = @{},   # codePath -> ADO GUID; mutated in-place for caller to persist
+        [switch]$Prune               # delete orphans (Apply) / report would-delete (WhatIf)
     )
 
     $findings = [System.Collections.Generic.List[string]]::new()
@@ -35,6 +44,7 @@ function Invoke-GovernanceReconcile {
     $rOk      = { param($m) Write-Host "  [ok]      $m" -ForegroundColor Green }
     $rCreated = { param($m) Write-Host "  [+]       $m  [created]" -ForegroundColor Yellow }
     $rFixed   = { param($m) Write-Host "  [~]       $m  [corrected]" -ForegroundColor Yellow }
+    $rDeleted = { param($m) Write-Host "  [-]       $m  [deleted]" -ForegroundColor Yellow }
     $rWould   = { param($m) Write-Host "  [NON-COMPLIANT] $m  (dry-run: no changes made)" -ForegroundColor Cyan }
     $rMissing = { param($m) Write-Host "  [MISSING] $m" -ForegroundColor Red }
     $rDrift   = { param($m) Write-Host "  [DRIFT]   $m" -ForegroundColor Red }
@@ -72,14 +82,32 @@ function Invoke-GovernanceReconcile {
         }
     }
 
-    # Audit exceptions: best-effort bulk fetch for extra paths
+    # Audit exceptions: best-effort bulk fetch for extra paths.
+    # Orphans are matched against EVERY path in the resolved model, including
+    # scope:future placeholders — future products are invisible to apply/audit
+    # and must never be flagged (or pruned) as orphans.
     try {
+        $modelPaths = [System.Collections.Generic.HashSet[string]]::new(
+            [string[]]@($Resolved.areaPaths | ForEach-Object { $_.path }),
+            [System.StringComparer]::OrdinalIgnoreCase)
         $bulkAreas = Get-AdoAreaPathSubtree -OrgUrl $OrgUrl -Project $project
         if ($bulkAreas.Count -gt 1) {
-            foreach ($livePath in ($bulkAreas.Keys | Sort-Object)) {
-                if ($livePath -notin $desiredPaths) {
+            # Deepest-first so pruning a subtree removes children before parents.
+            $orphanAreas = @($bulkAreas.Keys | Where-Object { -not $modelPaths.Contains($_) } |
+                Sort-Object { ($_ -split '\\').Count } -Descending)
+            foreach ($livePath in $orphanAreas) {
+                if ($Prune -and $doFix) {
+                    try {
+                        Remove-AdoAreaPath -OrgUrl $OrgUrl -Project $project -ResolvedPath $livePath
+                        & $rDeleted "area path: $livePath"
+                    } catch {
+                        $findings.Add("ERROR deleting orphan area path '$livePath': $_")
+                        & $rError "delete area path '$livePath': $_"
+                    }
+                } else {
                     $findings.Add("AUDIT EXCEPTION area path: $livePath")
-                    & $rOrphan "area path: $livePath"
+                    if ($Prune -and $Mode -eq 'WhatIf') { & $rWould "delete orphan area path: $livePath" }
+                    else                                { & $rOrphan "area path: $livePath" }
                 }
             }
         }
@@ -249,13 +277,28 @@ function Invoke-GovernanceReconcile {
         }
     }
 
+    # Orphan teams: exempt the project default team and scope:future teams —
+    # future products are invisible to apply/audit and must never be flagged
+    # (or pruned) as orphans.
+    $futureTeamNames    = @($Resolved.teams | Where-Object { $_.scope -eq 'future' } | ForEach-Object { $_.name })
     $desiredTeamNameSet = [System.Collections.Generic.HashSet[string]]::new(
-        [string[]]@(@($desiredTeams | ForEach-Object { $_.name }) + @($project) + @("$project Team")),
+        [string[]]@(@($desiredTeams | ForEach-Object { $_.name }) + $futureTeamNames + @($project) + @("$project Team")),
         [System.StringComparer]::OrdinalIgnoreCase)
     foreach ($liveName in ($liveTeamNames | Sort-Object)) {
         if (-not $desiredTeamNameSet.Contains($liveName)) {
-            $findings.Add("AUDIT EXCEPTION team: $liveName")
-            & $rOrphan "team: $liveName"
+            if ($Prune -and $doFix) {
+                try {
+                    Remove-AdoTeam -OrgUrl $OrgUrl -Project $project -TeamId $liveTeams[$liveName]
+                    & $rDeleted "team: $liveName"
+                } catch {
+                    $findings.Add("ERROR deleting orphan team '$liveName': $_")
+                    & $rError "delete team '$liveName': $_"
+                }
+            } else {
+                $findings.Add("AUDIT EXCEPTION team: $liveName")
+                if ($Prune -and $Mode -eq 'WhatIf') { & $rWould "delete orphan team: $liveName" }
+                else                                { & $rOrphan "team: $liveName" }
+            }
         }
     }
 
@@ -298,14 +341,19 @@ function Invoke-GovernanceReconcile {
             if (-not $descriptor) { continue }
 
             try {
-                $liveMembers = Get-AdoGroupMemberSet -OrgUrl $OrgUrl -Descriptor $descriptor
+                $liveMembers  = Get-AdoGroupMemberSet -OrgUrl $OrgUrl -Descriptor $descriptor
+                $desiredDescs = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::OrdinalIgnoreCase)
+                $unresolved   = $false
+
                 foreach ($m in $members) {
                     $mDesc = Find-AdoUserDescriptor -OrgUrl $OrgUrl -Upn $m
                     if (-not $mDesc) {
                         $findings.Add("UNRESOLVABLE member '$m' in '$($grp.ado)'")
                         & $rError "unresolvable user '$m' in '$($grp.ado)'"
+                        $unresolved = $true
                         continue
                     }
+                    $desiredDescs.Add($mDesc) | Out-Null
                     if (-not $liveMembers.ContainsKey($mDesc)) {
                         if ($doFix) {
                             try {
@@ -319,6 +367,32 @@ function Invoke-GovernanceReconcile {
                             $findings.Add("MISSING member '$m' in '$($grp.ado)'")
                             if ($Mode -eq 'WhatIf') { & $rWould "add member: $m -> $($grp.ado)" }
                             else                     { & $rMissing "member: $m in $($grp.ado)" }
+                        }
+                    }
+                }
+
+                # Extra members: user descriptors (aad./msa.) in the live group but
+                # not in config. Nested groups are never touched — access.yaml allows
+                # Entra groups to be nested and they can't be matched to the UPN list.
+                # Skipped entirely if any desired member failed to resolve, because
+                # an unresolved desired member is indistinguishable from an extra.
+                if (-not $unresolved) {
+                    $extras = @($liveMembers.Keys | Where-Object {
+                        $_ -match '^(aad|msa)\.' -and -not $desiredDescs.Contains($_) })
+                    foreach ($xDesc in $extras) {
+                        $xName = Resolve-AdoMemberDisplay -OrgUrl $OrgUrl -Descriptor $xDesc
+                        if ($Prune -and $doFix) {
+                            try {
+                                Remove-AdoGroupMember -OrgUrl $OrgUrl -MemberDescriptor $xDesc -ContainerDescriptor $descriptor
+                                & $rDeleted "member: $xName <- $($grp.ado)"
+                            } catch {
+                                $findings.Add("ERROR removing extra member '$xName' from '$($grp.ado)': $_")
+                                & $rError "remove member '$xName' from '$($grp.ado)': $_"
+                            }
+                        } else {
+                            $findings.Add("DRIFT group '$($grp.ado)': extra member '$xName' not in config")
+                            if ($Prune -and $Mode -eq 'WhatIf') { & $rWould "remove member: $xName from $($grp.ado)" }
+                            else                                { & $rDrift "group '$($grp.ado)': extra member '$xName'" }
                         }
                     }
                 }
@@ -346,6 +420,30 @@ function Invoke-GovernanceReconcile {
                 $findings.Add("MISSING repo: $($repo.name)")
                 if ($Mode -eq 'WhatIf') { & $rWould "create repo: $($repo.name)" }
                 else                     { & $rMissing "repo: $($repo.name)" }
+            }
+        }
+    }
+
+    # Orphan repos: exist in ADO but not in the resolved model. The project
+    # default repo (named after the project) is exempt. Pruning soft-deletes
+    # to the recycle bin (~30 days recoverable).
+    $desiredRepoNames = [System.Collections.Generic.HashSet[string]]::new(
+        [string[]]@(@($Resolved.repos | Where-Object { $_ } | ForEach-Object { $_.name }) + @($project)),
+        [System.StringComparer]::OrdinalIgnoreCase)
+    foreach ($liveRepoName in ($liveRepos.Keys | Sort-Object)) {
+        if (-not $desiredRepoNames.Contains($liveRepoName)) {
+            if ($Prune -and $doFix) {
+                try {
+                    Remove-AdoRepo -OrgUrl $OrgUrl -Project $project -RepoId $liveRepos[$liveRepoName]
+                    & $rDeleted "repo: $liveRepoName"
+                } catch {
+                    $findings.Add("ERROR deleting orphan repo '$liveRepoName': $_")
+                    & $rError "delete repo '$liveRepoName': $_"
+                }
+            } else {
+                $findings.Add("AUDIT EXCEPTION repo: $liveRepoName")
+                if ($Prune -and $Mode -eq 'WhatIf') { & $rWould "delete orphan repo: $liveRepoName" }
+                else                                { & $rOrphan "repo: $liveRepoName" }
             }
         }
     }

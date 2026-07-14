@@ -204,7 +204,10 @@ function Invoke-AdoRest {
     $response = Invoke-RestMethod @params
     # ADO returns an HTML sign-in page (HTTP 203) when auth fails or the PAT lacks scope.
     # A string response here is always wrong — fail loudly rather than silently returning null.
+    # Exception: DELETE returns 204 No Content; Invoke-RestMethod yields an empty string for
+    # that, which is the expected success response, not an error.
     if ($response -is [string]) {
+        if ($Method -ieq 'DELETE' -and [string]::IsNullOrEmpty($response)) { return $null }
         throw "ADO REST returned non-JSON (HTML/text). Check PAT is set and has the required scope. URL: $uri"
     }
     return $response
@@ -322,14 +325,22 @@ function Set-AdoTeamAreaConfig {
 # ─── Repos ────────────────────────────────────────────────────────────────────
 
 function Get-AdoRepoSet {
-    <# Returns a hashtable of existing repo names. #>
+    <# Returns a hashtable of existing repo name -> repo id. #>
     [CmdletBinding()]
     param([string]$OrgUrl, [string]$Project)
     $set  = @{}
     $json = az repos list --organization $OrgUrl --project $Project --output json 2>$null
     if ($LASTEXITCODE -ne 0 -or [string]::IsNullOrWhiteSpace($json)) { return $set }
-    foreach ($repo in ($json | ConvertFrom-Json)) { $set[$repo.name] = $true }
+    foreach ($repo in ($json | ConvertFrom-Json)) { $set[$repo.name] = $repo.id }
     return $set
+}
+
+function Remove-AdoRepo {
+    <# Soft-deletes a repo by id (ADO keeps it in the recycle bin for ~30 days). #>
+    [CmdletBinding()]
+    param([string]$OrgUrl, [string]$Project, [string]$RepoId)
+    az repos delete --organization $OrgUrl --project $Project --id $RepoId --yes --output none
+    if ($LASTEXITCODE -ne 0) { throw "Failed to delete repo '$RepoId'." }
 }
 
 function New-AdoRepo {
@@ -401,6 +412,32 @@ function Add-AdoGroupMember {
     $cEnc = [Uri]::EscapeDataString($ContainerDescriptor)
     Invoke-AdoRest -OrgUrl $OrgUrl -Path "_apis/graph/memberships/$mEnc/$cEnc" `
         -Method 'PUT' -ApiVersion '7.1-preview.1' | Out-Null
+}
+
+function Remove-AdoGroupMember {
+    <# Removes a member (by descriptor) from a group (by descriptor) via the graph memberships API. #>
+    [CmdletBinding()]
+    param([string]$OrgUrl, [string]$MemberDescriptor, [string]$ContainerDescriptor)
+    $mEnc = [Uri]::EscapeDataString($MemberDescriptor)
+    $cEnc = [Uri]::EscapeDataString($ContainerDescriptor)
+    Invoke-AdoRest -OrgUrl $OrgUrl -Path "_apis/graph/memberships/$mEnc/$cEnc" `
+        -Method 'DELETE' -ApiVersion '7.1-preview.1' | Out-Null
+}
+
+function Resolve-AdoMemberDisplay {
+    <# Best-effort human-readable name (principalName) for a graph member
+       descriptor, used to make findings about extra members actionable.
+       Falls back to the raw descriptor — display only, never a compliance
+       decision, so the fallback is safe. #>
+    [CmdletBinding()]
+    param([string]$OrgUrl, [string]$Descriptor)
+    try {
+        $user = Invoke-AdoRest -OrgUrl $OrgUrl `
+            -Path "_apis/graph/users/$([Uri]::EscapeDataString($Descriptor))" `
+            -ApiVersion '7.1-preview.1'
+        if ($user.principalName) { return $user.principalName }
+    } catch { Write-Verbose "Resolve-AdoMemberDisplay: $_" }
+    return $Descriptor
 }
 
 # ─── Pipeline folders (CLI) ───────────────────────────────────────────────────
@@ -575,6 +612,51 @@ function Get-AdoAreaPathSubtree {
         }
     }
     return $set
+}
+
+function Remove-AdoAreaPath {
+    <#
+        .SYNOPSIS
+        Deletes an area classification node (and its subtree). Any work items
+        assigned to it are reparented to the node's parent first ($reparentTo
+        takes the parent node's integer id). Refuses to delete the project root.
+        Throws on failure.
+    #>
+    [CmdletBinding()]
+    param([string]$OrgUrl, [string]$Project, [string]$ResolvedPath)
+    $segments = $ResolvedPath.TrimStart('\') -split '\\'
+    if ($segments.Count -le 1) {
+        throw "Remove-AdoAreaPath: refusing to delete the project root area path '$ResolvedPath'."
+    }
+
+    $subPath = ($segments[1..($segments.Count - 1)] |
+        ForEach-Object { [Uri]::EscapeDataString($_) }) -join '/'
+
+    # Parent node id: project root when deleting a first-level node.
+    $parentApiPath = if ($segments.Count -eq 2) {
+        "$Project/_apis/wit/classificationnodes/areas?`$depth=0"
+    } else {
+        $parentSub = ($segments[1..($segments.Count - 2)] |
+            ForEach-Object { [Uri]::EscapeDataString($_) }) -join '/'
+        "$Project/_apis/wit/classificationnodes/areas/$parentSub"
+    }
+    $parent = Invoke-AdoRest -OrgUrl $OrgUrl -Path $parentApiPath
+    if ($null -eq $parent.id) {
+        throw "Remove-AdoAreaPath: could not resolve parent node for '$ResolvedPath'."
+    }
+
+    Invoke-AdoRest -OrgUrl $OrgUrl `
+        -Path "$Project/_apis/wit/classificationnodes/areas/${subPath}?`$reparentTo=$($parent.id)" `
+        -Method 'DELETE' | Out-Null
+}
+
+function Remove-AdoTeam {
+    <# Deletes a team by GUID. Deleting a team does not delete its work items. #>
+    [CmdletBinding()]
+    param([string]$OrgUrl, [string]$Project, [string]$TeamId)
+    Invoke-AdoRest -OrgUrl $OrgUrl `
+        -Path "_apis/projects/$([Uri]::EscapeDataString($Project))/teams/$TeamId" `
+        -Method 'DELETE' | Out-Null
 }
 
 function Get-AdoTeamList {

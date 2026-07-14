@@ -7,13 +7,17 @@ function Invoke-GovernanceApply {
 
         Use -WhatIf to run in preview mode -- shows what would change without
         making any changes (equivalent to 'plan').
+
+        Use -Prune (or manifest settings.prune: true) to DELETE resources that
+        exist in ADO but not in the resolved model. Never on by default.
     #>
     [CmdletBinding()]
     param(
         [Parameter(Mandatory)][string]$ProgramPath,
         [Parameter(Mandatory)][string]$ResolvedPath,
         [string]$Org,
-        [switch]$WhatIf
+        [switch]$WhatIf,
+        [switch]$Prune
     )
 
     # Always build first -- ensures the resolved model is current before touching live ADO.
@@ -33,8 +37,12 @@ function Invoke-GovernanceApply {
     $resolved = ConvertFrom-Yaml (Get-Content $ResolvedPath -Raw)
     $mode     = if ($WhatIf) { 'WhatIf' } else { 'Apply' }
 
-    Write-Host "Applying '$($resolved.program)' in $orgUrl  [mode: $mode]" -ForegroundColor Cyan
-    Invoke-GovernanceReconcile -Resolved $resolved -OrgUrl $orgUrl -Mode $mode -TeamIds $teamIds | Out-Null
+    # Prune is opt-in: the -Prune switch or manifest settings.prune enables it.
+    $pruneEnabled = $Prune.IsPresent -or ($manifest.settings -and [bool]$manifest.settings.prune)
+    $modeLabel    = if ($pruneEnabled) { "$mode + prune" } else { $mode }
+
+    Write-Host "Applying '$($resolved.program)' in $orgUrl  [mode: $modeLabel]" -ForegroundColor Cyan
+    Invoke-GovernanceReconcile -Resolved $resolved -OrgUrl $orgUrl -Mode $mode -TeamIds $teamIds -Prune:$pruneEnabled | Out-Null
 
     # Persist discovered/created team GUIDs back to team-ids.yaml (Apply mode only)
     if ($mode -eq 'Apply' -and $teamIds.Count -gt 0) {

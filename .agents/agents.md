@@ -76,7 +76,7 @@ This is not a provisioning helper that creates missing things and moves on. It i
 | `build` | Compile `programs/<name>/*.yaml` → `out/<name>/resolved.yaml`. Validates schema, unique codes, owner refs, ADO path limits. No live calls. |
 | `validate` | Same checks as build but writes nothing. |
 | `plan` | Diff resolved desired state vs live ADO. Lists every change that `apply` would make. **Read-only.** |
-| `apply` | Reconcile live ADO to resolved desired state. Creates missing resources **and corrects misconfigured ones**. Supports `-WhatIf`. |
+| `apply` | Reconcile live ADO to resolved desired state. Creates missing resources **and corrects misconfigured ones**. Supports `-WhatIf`. With `-Prune` (or manifest `settings.prune: true`) also **deletes** orphans — teams, area paths, repos, and extra group members that exist in ADO but not in config. Prune is **never on by default**; `scope: future` placeholders, the project default team/repo, and iteration paths (ADR-005) are never pruned. |
 | `audit` | Read-only compliance report. Reports every resource that deviates from desired state — missing, extra, or wrongly configured. |
 
 ---

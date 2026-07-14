@@ -35,7 +35,8 @@ param(
 
     [string]$Program,
     [string]$Org,
-    [switch]$WhatIf
+    [switch]$WhatIf,
+    [switch]$Prune
 )
 
 $ErrorActionPreference = 'Stop'
@@ -59,6 +60,9 @@ Options:
   -Program  Target one program under programs/ (default: all programs)
   -Org      Override the org declared in the program manifest.yaml
   -WhatIf   (apply) Show what would change without making any changes
+  -Prune    (apply) DELETE resources in ADO that are not in the config
+            (orphan teams, area paths, repos, extra group members).
+            Never on by default; can also be set via manifest settings.prune.
 
 Examples:
   ./build.ps1 build
@@ -66,6 +70,7 @@ Examples:
   ./build.ps1 validate -Program odyssey
   ./build.ps1 plan     -Program odyssey
   ./build.ps1 apply    -Program odyssey -WhatIf
+  ./build.ps1 apply    -Program odyssey -WhatIf -Prune   # preview deletions
 '@
     return
 }
@@ -105,7 +110,7 @@ foreach ($programPath in $programPaths) {
         'build'    { Invoke-GovernanceBuild -ProgramPath $programPath -OutputPath $resolvedPath }
         'validate' { Test-Governance        -ProgramPath $programPath }
         'plan'     { Invoke-GovernancePlan   -ProgramPath $programPath -ResolvedPath $resolvedPath -Org $Org }
-        'apply'    { Invoke-GovernanceApply  -ProgramPath $programPath -ResolvedPath $resolvedPath -Org $Org -WhatIf:$WhatIf }
+        'apply'    { Invoke-GovernanceApply  -ProgramPath $programPath -ResolvedPath $resolvedPath -Org $Org -WhatIf:$WhatIf -Prune:$Prune }
         'audit'    { Invoke-GovernanceAudit  -ProgramPath $programPath -ResolvedPath $resolvedPath -Org $Org }
     }
 }
