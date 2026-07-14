@@ -464,7 +464,7 @@ function New-AdoPipelineFolder {
 
 # ─── Pipeline folder ACLs (REST security API) ─────────────────────────────────
 
-$script:PipelineBuildNamespaceId = '33344d9c-fc72-4d6f-aba5-fa317101a7e8'
+$script:PipelineBuildNamespaceId = '33344d9c-fc72-4d6f-aba5-fa317101a7e9'
 
 function ConvertTo-PipelinePermissionBit {
     <#
