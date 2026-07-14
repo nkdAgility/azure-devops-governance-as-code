@@ -484,8 +484,17 @@ function Invoke-GovernanceReconcile {
         $iterIdCache = @{}
 
         foreach ($team in ($Resolved.teams | Where-Object { $_.scope -ne 'future' -and $_.name -ne $project })) {
-            $isPortfolio = ($team.kind -eq 'portfolio' -or $team.kind -eq 'product')
-            $scopePaths  = if ($isPortfolio) {
+            # iterationScope comes from the team's type (portfolio/structural ->
+            # seasons, delivery -> sprints) or a per-node override; kind is the
+            # fallback for resolved models built before team types existed.
+            $scope = if ($team.iterationScope) { [string]$team.iterationScope }
+                     elseif ($team.kind -in @('portfolio', 'product')) { 'seasons' }
+                     else { 'sprints' }
+            if ($scope -eq 'none') {
+                & $rOk "team: $($team.name)  (iteration scope: none)"
+                continue
+            }
+            $scopePaths = if ($scope -eq 'seasons') {
                 Get-InScopeSeasonPaths -Calendar $calendar -Back $pBack -Forward $pFwd
             } else {
                 Get-InScopeSprintPaths -Calendar $calendar -Back $tBack -Forward $tFwd
@@ -516,7 +525,64 @@ function Invoke-GovernanceReconcile {
         }
     }
 
-    # ── 5. Security groups ────────────────────────────────────────────────────
+    # ── 5. Team backlog levels ────────────────────────────────────────────────
+    # Each team's visible backlog levels must match its type exactly (e.g.
+    # delivery teams see Requirements + Stories, portfolio teams Initiatives).
+    # Wrong visibility in either direction is drift.
+    $backlogTeams = @($desiredTeams | Where-Object { $_.backlogs })
+    if ($backlogTeams.Count -gt 0) {
+        Write-Host "`n--- Team backlog levels ---" -ForegroundColor Cyan
+
+        foreach ($team in $backlogTeams) {
+            # Team missing entirely — already flagged in the Teams section.
+            if (-not $liveTeamNames.Contains($team.name)) { continue }
+            try {
+                $levels = @(Get-AdoTeamBacklogLevels -OrgUrl $OrgUrl -Project $project -Team $team.name)
+                $live   = Get-AdoTeamBacklogVisibilities -OrgUrl $OrgUrl -Project $project -Team $team.name
+
+                $levelNames = @($levels | ForEach-Object { $_.name })
+                foreach ($name in @($team.backlogs)) {
+                    if ($name -notin $levelNames) {
+                        $findings.Add("DRIFT team '$($team.name)': configured backlog level '$name' does not exist in the process (levels: $($levelNames -join ', '))")
+                        & $rError "team '$($team.name)': backlog level '$name' not in process"
+                    }
+                }
+
+                $desiredVis = @{}
+                $driftItems = [System.Collections.Generic.List[string]]::new()
+                foreach ($lvl in $levels) {
+                    $want = $lvl.name -in @($team.backlogs)
+                    $desiredVis[$lvl.id] = $want
+                    $have = if ($live.ContainsKey($lvl.id)) { [bool]$live[$lvl.id] } else { $null }
+                    if ($have -ne $want) {
+                        $haveDesc = if ($null -eq $have) { 'unknown' } elseif ($have) { 'visible' } else { 'hidden' }
+                        $wantDesc = if ($want) { 'visible' } else { 'hidden' }
+                        $driftItems.Add("DRIFT team '$($team.name)': backlog '$($lvl.name)' should be $wantDesc but is $haveDesc")
+                    }
+                }
+
+                if ($driftItems.Count -eq 0) {
+                    & $rOk "team: $($team.name)  (backlog levels)"
+                } elseif ($doFix) {
+                    try {
+                        Set-AdoTeamBacklogVisibilities -OrgUrl $OrgUrl -Project $project `
+                            -Team $team.name -Visibilities $desiredVis
+                        & $rFixed "team: $($team.name)  backlog levels"
+                    } catch {
+                        foreach ($d in $driftItems) { $findings.Add($d) }
+                        $findings.Add("ERROR setting backlog levels for '$($team.name)': $_")
+                        & $rError "set backlog levels '$($team.name)': $_"
+                    }
+                } else {
+                    foreach ($d in $driftItems) { $findings.Add($d) }
+                    if ($Mode -eq 'WhatIf') { & $rWould "correct backlog levels for team: $($team.name)" }
+                    else                     { & $rDrift "team: $($team.name)  backlog levels wrong" }
+                }
+            } catch { & $rError "read backlog levels for '$($team.name)': $_" }
+        }
+    }
+
+    # ── Findings summary ──────────────────────────────────────────────────────
     $exceptions = @($findings | Where-Object { $_ -like 'AUDIT EXCEPTION*' })
     $missing    = @($findings | Where-Object { $_ -like 'MISSING*' })
     $drift      = @($findings | Where-Object { $_ -notlike 'AUDIT EXCEPTION*' -and $_ -notlike 'MISSING*' })

@@ -705,3 +705,55 @@ function Add-AdoTeamIteration {
         if ($_ -notmatch 'already exists|duplicate') { throw }
     }
 }
+
+function Get-AdoTeamBacklogLevels {
+    <#
+        .SYNOPSIS
+        Returns the backlog levels available to a team from its process, as an
+        array of @{ id = <category reference, e.g. Microsoft.RequirementCategory>;
+        name = <display name, e.g. Stories> }. The task-level (iteration) backlog
+        is excluded — only portfolio and requirement backlogs can be toggled.
+        Throws if the API returns none — every process has at least one.
+    #>
+    [CmdletBinding()]
+    param([string]$OrgUrl, [string]$Project, [string]$Team)
+    $encoded = [Uri]::EscapeDataString($Team)
+    $data    = Invoke-AdoRest -OrgUrl $OrgUrl -Path "$Project/$encoded/_apis/work/backlogs"
+    $levels  = @($data.value | Where-Object { $_.type -ne 'iteration' } |
+        ForEach-Object { [ordered]@{ id = $_.id; name = $_.name } })
+    if ($levels.Count -eq 0) {
+        throw "Get-AdoTeamBacklogLevels: no backlog levels returned for team '$Team' in '$Project'."
+    }
+    return $levels
+}
+
+function Get-AdoTeamBacklogVisibilities {
+    <# Returns the team's backlog visibility map as a hashtable:
+       category reference (e.g. Microsoft.EpicCategory) -> bool. #>
+    [CmdletBinding()]
+    param([string]$OrgUrl, [string]$Project, [string]$Team)
+    $encoded  = [Uri]::EscapeDataString($Team)
+    $settings = Invoke-AdoRest -OrgUrl $OrgUrl -Path "$Project/$encoded/_apis/work/teamsettings"
+    $vis = @{}
+    if ($settings.backlogVisibilities) {
+        foreach ($p in $settings.backlogVisibilities.PSObject.Properties) {
+            $vis[$p.Name] = [bool]$p.Value
+        }
+    }
+    return $vis
+}
+
+function Set-AdoTeamBacklogVisibilities {
+    <# Replaces the team's backlog visibility map wholesale (PATCH teamsettings).
+       Visibilities: hashtable of category reference -> bool. #>
+    [CmdletBinding()]
+    param(
+        [string]$OrgUrl,
+        [string]$Project,
+        [string]$Team,
+        [Parameter(Mandatory)][hashtable]$Visibilities
+    )
+    $encoded = [Uri]::EscapeDataString($Team)
+    Invoke-AdoRest -OrgUrl $OrgUrl -Path "$Project/$encoded/_apis/work/teamsettings" `
+        -Method 'PATCH' -Body @{ backlogVisibilities = $Visibilities } | Out-Null
+}

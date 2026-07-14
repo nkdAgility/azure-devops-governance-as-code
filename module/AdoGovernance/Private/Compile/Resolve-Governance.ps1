@@ -8,6 +8,50 @@ $script:BandDisplayName = @{
     peng     = 'Platform Engineering'
 }
 
+# Team types drive planning behaviour: area sub-tree visibility, backlog levels,
+# and iteration scope. Position in the tree supplies the default type; nodes in
+# hierarchy.yaml may override with `type:` and `iterations:`. cadence.yaml
+# `teamTypes:` overrides these built-in settings per type.
+$script:TeamTypeNames       = @('portfolio', 'structural', 'delivery')
+$script:IterationScopeNames = @('sprints', 'seasons', 'none')
+$script:DefaultTeamTypes = @{
+    portfolio  = @{ includeSubAreas = $true;  backlogs = @('Initiatives');                 iterationScope = 'seasons' }
+    structural = @{ includeSubAreas = $true;  backlogs = @('Initiatives', 'Requirements'); iterationScope = 'seasons' }
+    delivery   = @{ includeSubAreas = $false; backlogs = @('Requirements', 'Stories');     iterationScope = 'sprints' }
+}
+
+function Get-TeamTypeDefs {
+    <# Merges cadence.yaml teamTypes over the built-in defaults. Throws on
+       unknown type names or iteration scope values — config errors must fail
+       the build, not silently fall back. #>
+    [CmdletBinding()]
+    param([object]$Cadence)
+
+    $defs = @{}
+    foreach ($t in $script:TeamTypeNames) {
+        $defs[$t] = @{
+            includeSubAreas = $script:DefaultTeamTypes[$t].includeSubAreas
+            backlogs        = @($script:DefaultTeamTypes[$t].backlogs)
+            iterationScope  = $script:DefaultTeamTypes[$t].iterationScope
+        }
+    }
+    if ($Cadence -and $Cadence.teamTypes) {
+        foreach ($key in @($Cadence.teamTypes.Keys)) {
+            if ($key -notin $script:TeamTypeNames) {
+                throw "cadence.yaml teamTypes: unknown team type '$key' (expected one of: $($script:TeamTypeNames -join ', '))."
+            }
+            $spec = $Cadence.teamTypes[$key]
+            if ($null -ne $spec.includeSubAreas) { $defs[$key].includeSubAreas = [bool]$spec.includeSubAreas }
+            if ($spec.backlogs)                  { $defs[$key].backlogs = @($spec.backlogs) }
+            if ($spec.iterations)                { $defs[$key].iterationScope = [string]$spec.iterations }
+            if ($defs[$key].iterationScope -notin $script:IterationScopeNames) {
+                throw "cadence.yaml teamTypes.${key}: unknown iterations value '$($defs[$key].iterationScope)' (expected: $($script:IterationScopeNames -join ', '))."
+            }
+        }
+    }
+    return $defs
+}
+
 function Add-OwnedEntry {
     <# Records that a node's area path is managed by another team (owner back-reference).
        Keyed by the owner's product-qualified code (e.g. PTL-FND), not the bare leaf. #>
@@ -53,15 +97,30 @@ function Add-TeamNode {
         Add-OwnedEntry -Ctx $Ctx -Key $Node.owner -Path $path -IncludeSubAreas $true
     }
     else {
+        $type = if ($Node.type) { [string]$Node.type }
+                elseif ($hasChildren) { 'structural' }
+                else { 'delivery' }
+        if ($type -notin $script:TeamTypeNames) {
+            throw "hierarchy.yaml: node '$($Node.name)' has unknown type '$type' (expected one of: $($script:TeamTypeNames -join ', '))."
+        }
+        $typeDef   = $Ctx.TypeDefs[$type]
+        $iterScope = if ($Node.iterations) { [string]$Node.iterations } else { $typeDef.iterationScope }
+        if ($iterScope -notin $script:IterationScopeNames) {
+            throw "hierarchy.yaml: node '$($Node.name)' has unknown iterations value '$iterScope' (expected: $($script:IterationScopeNames -join ', '))."
+        }
+
         $folder = if ($IsFirstLevel) { $path.Substring($ProgramRoot.Length) } else { $null }
         $Ctx.Teams.Add([ordered]@{
             name            = $qualifiedName
             short           = $Node.short
             kind            = 'team'
+            type            = $type
             parent          = $ParentTeamName
             codePath        = $codePath
             defaultAreaPath = $path
-            includeSubAreas = $hasChildren
+            includeSubAreas = $typeDef.includeSubAreas
+            iterationScope  = $iterScope
+            backlogs        = @($typeDef.backlogs)
             pipelineFolder  = $folder
         })
     }
@@ -87,12 +146,16 @@ function Resolve-Governance {
         [object]$Cadence    = $null   # optional cadence.yaml content for iteration generation
     )
 
+    $typeDefs     = Get-TeamTypeDefs -Cadence $Cadence
+    $portfolioDef = $typeDefs['portfolio']
+
     $ctx = @{
         AreaPaths       = [System.Collections.Generic.List[object]]::new()
         Teams           = [System.Collections.Generic.List[object]]::new()
         Repos           = [System.Collections.Generic.List[object]]::new()
         PipelineFolders = [System.Collections.Generic.List[object]]::new()
         Owned           = @{}
+        TypeDefs        = $typeDefs
     }
 
     $program = $Manifest.program
@@ -103,10 +166,13 @@ function Resolve-Governance {
         name            = $program
         short           = $null
         kind            = 'portfolio'
+        type            = 'portfolio'
         parent          = $null
         codePath        = $program
         defaultAreaPath = $root
-        includeSubAreas = $true
+        includeSubAreas = $portfolioDef.includeSubAreas
+        iterationScope  = $portfolioDef.iterationScope
+        backlogs        = @($portfolioDef.backlogs)
         pipelineFolder  = $null
     })
 
@@ -127,10 +193,13 @@ function Resolve-Governance {
                 name            = "$($product.name) (portfolio)"
                 short           = $product.short
                 kind            = 'product'
+                type            = 'portfolio'
                 parent          = $program
                 codePath        = $product.short
                 defaultAreaPath = $productPath
-                includeSubAreas = $true
+                includeSubAreas = $portfolioDef.includeSubAreas
+                iterationScope  = $portfolioDef.iterationScope
+                backlogs        = @($portfolioDef.backlogs)
                 pipelineFolder  = $productPath.Substring($root.Length)
             }
             if ($product.scope) { $teamObj.scope = $product.scope }

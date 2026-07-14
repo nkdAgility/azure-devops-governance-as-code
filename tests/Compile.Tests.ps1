@@ -74,6 +74,38 @@ Describe 'Compile stage' {
         ($root.securityGroups.ado) | Should -Contain 'Odyssey-Readers'
     }
 
+    It 'stamps team types: containers are portfolio, leaves are delivery' {
+        ($script:resolved.teams | Where-Object name -eq 'Odyssey').type | Should -Be 'portfolio'
+        ($script:resolved.teams | Where-Object name -eq 'Portal DS (portfolio)').type | Should -Be 'portfolio'
+        ($script:resolved.teams | Where-Object short -eq 'GPI').type | Should -Be 'delivery'
+    }
+
+    It 'portfolio teams include sub-areas on their default area; delivery teams do not' {
+        $ptl = $script:resolved.teams | Where-Object name -eq 'Portal (portfolio)'
+        $ptl.includeSubAreas | Should -BeTrue
+        $gpi = $script:resolved.teams | Where-Object short -eq 'GPI'
+        $gpi.includeSubAreas | Should -BeFalse
+        ($gpi.areaConfig | Where-Object path -eq $gpi.defaultAreaPath).includeSubAreas | Should -BeFalse
+    }
+
+    It 'honours per-node overrides: Foundation is delivery with no sprint subscriptions' {
+        $fnd = $script:resolved.teams | Where-Object name -eq 'Portal · Foundation'
+        $fnd.type | Should -Be 'delivery'
+        $fnd.iterationScope | Should -Be 'none'
+        $fnd.includeSubAreas | Should -BeFalse
+    }
+
+    It 'derives iteration scope from team type (portfolio seasons, delivery sprints)' {
+        ($script:resolved.teams | Where-Object name -eq 'Portal DS (portfolio)').iterationScope | Should -Be 'seasons'
+        ($script:resolved.teams | Where-Object short -eq 'GPI').iterationScope | Should -Be 'sprints'
+        ($script:resolved.teams | Where-Object name -eq 'Portal · Foundation · Open API').iterationScope | Should -Be 'sprints'
+    }
+
+    It 'derives backlog levels from team type via cadence.yaml' {
+        @(($script:resolved.teams | Where-Object short -eq 'GPI').backlogs) | Should -Be @('Requirements', 'Stories')
+        @(($script:resolved.teams | Where-Object name -eq 'Odyssey').backlogs) | Should -Be @('Initiatives')
+    }
+
     It 'generates iteration paths from cadence.yaml' {
         $script:resolved.iterations | Should -Not -BeNullOrEmpty
         $script:resolved.iterations.paths.Count | Should -BeGreaterThan 10
