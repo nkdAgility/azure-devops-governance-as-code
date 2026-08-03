@@ -1,0 +1,103 @@
+# programs/odyssey/hierarchy.yaml — THE authored hierarchy (structure only).
+# Program identity + connection live in manifest.yaml.
+#
+# Grammar (fixed):  Odyssey \ {product-dpm} \ [platform|plugins|peng] \ {team}*
+#   - position in the tree IS the type (product / band / team)
+#   - a product is a product because it has a `dpm`
+#   - `sections` explicitly registers which bands exist (even when empty)
+#   - `owner: <code>` = area path here, managed by that team's config, no new team
+#   - `short` is the LEAF code; a node's global key is the product-qualified chain
+#     of shorts (Portal's Geological Interpretation `GLI` -> `PTL-GLI`). Leaf shorts
+#     may repeat across products; the qualified code is unique across the program.
+#   - `owner` references use that qualified code (e.g. `PTL-FND`, `PTL-GPI`).
+#   - `type: portfolio|structural|delivery` overrides the positional team type
+#     (default: node with child teams -> structural, leaf -> delivery)
+#   - `iterations: sprints|seasons|none` overrides the type's iteration scope
+
+products:
+
+  # ── Portal: large product, all three bands, teams within teams ──
+  - name: Portal
+    dpm: 101
+    short: PTL
+    sections:
+      - platform
+      - plugins
+      - peng
+    platform:
+      - name: Graphics Pipeline
+        short: GPI
+      - name: Foundation
+        short: FND
+        type: delivery      # working team even though Open API nests under it
+        iterations: none    # delivery team that does not plan in sprints
+      - name: Geometry Library
+        short: GLI
+      - name: Resource Modeling
+        short: RVM
+      - name: Stream Modeling
+        short: STM
+      - name: Connected Framework
+        short: CNF
+      - name: Rendering Engine and Grids
+        short: REG
+      - name: Runtime Geometry
+        short: RGM
+    plugins:
+      - { name: Plugin A, short: PLGA, owner: PTL-FND }   # area path here, managed by Foundation
+      - { name: Plugin B, short: PLGB, owner: PTL-GPI }   # area path here, managed by Graphics Pipeline
+    peng:
+      - { name: Platform Engineering, short: PENG }
+
+  # ── Peer products (sibling of Portal under Odyssey) ──
+  - name: Portal DS
+    dpm: 102
+    short: PDS
+
+  - name: Machine Learning for Portal
+    dpm: 103
+    short: MLP
+
+  - name: Open Framework for Portal
+    dpm: 104
+    short: OFP
+
+  - name: Studio
+    dpm: 105
+    short: STD
+
+  - name: Vista
+    dpm: ~            # DPM pending confirmation
+    short: VIS
+
+  # ── Colors: its own product node, but delivered by the Graphics Pipeline team ──
+  - name: Colors
+    dpm: 106
+    short: CLR
+    owner: PTL-GPI     # no separate Colors team; GPI's area config picks up \Odyssey\Colors
+
+  # ── Future: not in current migration scope ──
+  - { name: Trace Log,  dpm: 107, short: TLG, scope: future }
+  - { name: Integrate, dpm: 108, short: INT, scope: future }
+  - { name: PTS,       dpm: 109, short: PTS, scope: future }
+
+# Governed tag taxonomy (everything that is not a team becomes a
+# tag). `sanctioned` is the allowed structural vocabulary — anything else in ADO
+# is an audit exception. `disallowedPatterns` are ALWAYS drift (build-id-shaped
+# tags). Tags cannot be pre-created via REST (ADO purges
+# unused tags), so existence of sanctioned tags is not audited — only extras.
+tags:
+  sanctioned:
+    - Inbox
+    - Backlog
+    - Triage
+    - Priority-Bug
+    - QA-Test
+    - Sanity
+    - Research
+    - Stakeholders
+    - Open API
+    - Spike
+  disallowedPatterns:
+    - '^\d+$'             # bare build numbers
+    - '^(build|bld)[-_ ]' # build-id prefixed

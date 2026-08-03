@@ -317,7 +317,7 @@ function Resolve-Governance {
     }
 
     # Structural authority: each {key}-Admins group gets node-management rights
-    # over every area path its team governs (Decision-0028 delegated ownership —
+    # over every area path its team governs (delegated ownership —
     # structural permission only; admins need not be team members/contributors).
     $authority = [System.Collections.Generic.List[object]]::new()
     foreach ($team in $ctx.Teams) {

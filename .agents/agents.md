@@ -20,8 +20,10 @@ If the tests fail, fix the failure before doing anything else. Do not move on, d
 
 | Variable | Purpose |
 |---|---|
-| `AZDEVOPS_DEV_PAT` | Personal Access Token for `nkdagility-preview` org. Used by `programs/odyssey/manifest.yaml` as `accessToken`. |
+| `AZDEVOPS_DEV_PAT` | Personal Access Token for `nkdagility-preview` org. Referenced by the test fixture manifest (`tests/fixtures/programs/odyssey/manifest.yaml`) as `accessToken`. |
 | `AZDEVOPS_DEV_ORG` | Org URL (`https://dev.azure.com/nkdagility-preview`). **Not a PAT.** Do not use as `accessToken`. |
+
+Client programs define their own PAT env vars in their own repos (e.g. `AZDEVOPS_<CLIENT>_PAT` in the client repo's `governance/` folder). A manifest `accessToken` must always be an `$Env:` reference — never a literal token.
 
 If a manifest's `accessToken` resolves to a URL, `Set-AdoAuth` will throw immediately (guard is in `AzureDevOps.ps1`).
 
@@ -138,12 +140,16 @@ Products marked `scope: future` in `hierarchy.yaml` are **invisible to apply and
 ## Source layout
 
 ```
-programs/
+programs/            # empty by default — client programs live in client repos
+                     # (e.g. NKDAClient-<client>/governance/programs/) and are passed
+                     # to build.ps1 via -ProgramsRoot. A program folder holds:
   <name>/
     manifest.yaml    # org + accessToken reference + project declaration
     hierarchy.yaml   # authored product/team/band tree
     access.yaml      # role definitions + group naming conventions
     members/         # <codeKey>.yaml — desired group membership
+
+tests/fixtures/programs/  # frozen program snapshot — compile-test data only
 
 module/AdoGovernance/
   Private/

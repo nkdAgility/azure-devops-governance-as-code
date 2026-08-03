@@ -1,0 +1,19 @@
+# Auto-maintained by governance apply. Do not edit by hand.
+# Maps codePath -> ADO team GUID so teams can be found after a rename.
+teams:
+  MLP: 57fd9c3e-d302-4fc8-9910-847461fb4a06
+  OFP: 845e6cae-de66-4e80-a7eb-54a60ee65c89
+  PDS: f89d2a9d-1870-4dab-82ae-eed449072e78
+  PTL: c13d9337-353d-4950-9c4a-ae40b219b52e
+  PTL-CNF: 6aa69d30-0a98-43ba-b05b-1ec8b4ca87b4
+  PTL-FND: 403fd93e-85f2-4f3e-befc-060dcd396368
+  PTL-FND-OAPI: 5344e412-8bd3-490d-a897-72a2a91459c1
+  PTL-GLI: f7bd85e8-25e0-4164-95e1-3f4856fe9fbc
+  PTL-GPI: 8fa1b5a6-8794-4c84-8c50-25b8bd6ad297
+  PTL-PENG: 2739c03a-9080-4a55-bcb4-0e638d69482c
+  PTL-REG: 3b94c07c-cbc2-4e9e-9223-1c53b2bd2854
+  PTL-RGM: 3eadfb2c-1be3-4994-8aae-e5e1e20372fc
+  PTL-RVM: 60ba74c3-35f0-4a76-a090-e4f71e2e60ef
+  PTL-STM: d9e37de4-3de5-4055-a928-1aa61f0461e3
+  STD: 12a41340-95a6-4c1d-b6f0-09261a1fd506
+  VIS: 7283d3d2-ad46-4d2f-9f69-9c2f7bfd5718

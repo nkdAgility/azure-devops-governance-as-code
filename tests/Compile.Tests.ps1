@@ -4,8 +4,11 @@ BeforeAll {
     $repoRoot = Split-Path -Parent $PSScriptRoot
     Import-Module (Join-Path $repoRoot 'module/AdoGovernance/AdoGovernance.psd1') -Force
 
-    $programPath = Join-Path $repoRoot 'programs/odyssey'
-    $outputPath  = Join-Path $repoRoot 'out/odyssey/resolved.yaml'
+    # Frozen snapshot of a real program, used purely as compile-pipeline test
+    # data. Live client programs no longer live in this repo (they sit in the
+    # client's own repo and are pointed at build.ps1 via -ProgramsRoot).
+    $programPath = Join-Path $PSScriptRoot 'fixtures/programs/odyssey'
+    $outputPath  = Join-Path $repoRoot 'out/test-fixture-odyssey/resolved.yaml'
     $script:outputPath = Invoke-GovernanceBuild -ProgramPath $programPath -OutputPath $outputPath
     $script:resolved = ConvertFrom-Yaml (Get-Content $script:outputPath -Raw)
 }
@@ -146,7 +149,7 @@ Describe 'Compile stage' {
         ($script:resolved.teams | Where-Object name -eq 'Portal (portfolio)').securityGroups.ado | Should -Contain 'PTL-Admins'
     }
 
-    It 'grants Alex structural authority on Portal and each adjacent product' {
+    It 'grants the program owner structural authority on Portal and each adjacent product' {
         foreach ($code in @('PTL', 'PDS', 'MLP', 'OFP', 'STD', 'VIS')) {
             $team  = $script:resolved.teams | Where-Object codePath -eq $code
             $admin = $team.securityGroups | Where-Object role -eq 'admin'
@@ -156,7 +159,7 @@ Describe 'Compile stage' {
         }
     }
 
-    It 'grants Jordan structural authority on Foundation with a recorded reason' {
+    It 'grants the Foundation owner structural authority with a recorded reason' {
         $fnd   = $script:resolved.teams | Where-Object codePath -eq 'PTL-FND'
         $admin = $fnd.securityGroups | Where-Object role -eq 'admin'
         $admin.members[0].upn | Should -BeLike 'jordan*'

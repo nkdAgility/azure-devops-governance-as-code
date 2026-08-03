@@ -1,0 +1,7 @@
+# Membership for the Odyssey program root groups.
+# Entries: { upn: user@corp.com, reason: "...", expires: YYYY-MM-DD (optional) }
+# or       { group: "Entra Group Name", reason: "..." }
+# An empty role list means the group must have NO members (extras are drift).
+reader: []
+portfolioManager: []
+admin: []

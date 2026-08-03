@@ -1,0 +1,52 @@
+# governance/access.yaml — role & group catalog.
+#
+# Governance manages ADO groups and their MEMBERSHIP. It does NOT create or manage
+# Entra. People are declared in governance/members/<short>.yaml and reconciled
+# (added AND removed) by apply/audit. Existing Entra groups may be listed as
+# members and are nested into the ADO group — governance never creates them.
+#
+# {key} is the product-qualified chain of short codes (NO project prefix — the ADO
+# project already scopes it). Examples:
+#   product Portal        -> PTL
+#   team Resource Model. -> PTL-RVM
+#   sub-team Open API    -> PTL-FND-OAPI
+# The program root has no product and uses the program name (Odyssey).
+
+# What each role can do (consulted by apply when stamping ACLs).
+# admin = STRUCTURAL authority (delegated ownership): manage the
+# node's area paths, teams, and settings. It is not team membership and grants
+# no code access — admins (e.g. a program owner) need not be contributors.
+roles:
+  reader:
+    boards:    read
+    repos:     read
+    pipelines: read
+  contributor:
+    boards:    contribute
+    repos:     contribute
+    pipelines: "Edit, Queue"
+  portfolioManager:
+    boards:    edit-requirements
+    repos:     read
+    pipelines: read
+  admin:
+    boards:    manage
+    structure: manage     # CSS node ACLs over the team's areaConfig paths
+
+# Groups created on container nodes (program, product).
+containerGroups:
+  - { role: reader,           ado: "{key}-Readers" }
+  - { role: portfolioManager, ado: "{key}-PortMgrs" }
+  - { role: admin,            ado: "{key}-Admins" }
+
+# Groups created on team nodes (owning delivery teams).
+teamGroups:
+  - { role: contributor, ado: "{key}-Contributors" }
+  - { role: reader,      ado: "{key}-Readers" }
+  - { role: admin,       ado: "{key}-Admins" }
+
+# Project-wide work-item population (Stakeholder access, no code visibility).
+stakeholders:
+  ado:         "Odyssey-Stakeholders"
+  accessLevel: stakeholder
+  scope:       boards

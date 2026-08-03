@@ -8,9 +8,9 @@
 `hierarchy.yaml` contains products that are known but not yet in the active migration scope:
 
 ```yaml
-- { name: Trace Log,  dpm: 2530, short: TLG, scope: future }
-- { name: Integrate, dpm: 3293, short: INT, scope: future }
-- { name: PTS,       dpm: 5894, short: PTS, scope: future }
+- { name: Trace Log,  dpm: 107, short: TLG, scope: future }
+- { name: Integrate,  dpm: 108, short: INT, scope: future }
+- { name: PTS,        dpm: 109, short: PTS, scope: future }
 ```
 
 These products need to be represented in the hierarchy for completeness (DPM references, area path placeholders) but should not have teams provisioned, area paths created, or groups configured until they enter active migration.

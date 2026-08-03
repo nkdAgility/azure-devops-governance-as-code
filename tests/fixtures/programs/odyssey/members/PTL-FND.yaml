@@ -1,0 +1,6 @@
+# Membership for the Portal Foundation (PTL-FND) team groups.
+contributor: []
+reader: []
+admin:
+  - upn: jordan.blake@example.com
+    reason: "High-level structural authority over the Foundation subtree (delegated ownership)."

@@ -11,7 +11,7 @@ The initial `apply` implementation pre-fetched the entire area path tree with:
 az boards area project list --organization $OrgUrl --project $Project --depth 50
 ```
 
-On a large project (Odyssey has hundreds of existing area paths), this produced an `OutOfMemoryException` in PowerShell's `ConvertFrom-Json`. Reducing `--depth` to 10 did not resolve the issue because the response was still too large.
+On a large project (hundreds of pre-existing area paths), this produced an `OutOfMemoryException` in PowerShell's `ConvertFrom-Json`. Reducing `--depth` to 10 did not resolve the issue because the response was still too large.
 
 The same risk exists for any bulk-list operation (team list, group list, folder list) on a project that has grown over time.
 
@@ -34,6 +34,6 @@ Every `Test-Ado*` function calls a single REST endpoint for the specific resourc
 ## Consequences
 
 - `apply` makes N small REST calls (one per resource being reconciled) instead of 1 large call.
-- For the current Odyssey resolved model (24 area paths, 19 teams) this is ~43 REST calls instead of 2 bulk fetches — completely acceptable.
+- For a typical resolved model (~24 area paths, ~19 teams) this is ~43 REST calls instead of 2 bulk fetches — completely acceptable.
 - `Test-Ado*` functions **must re-throw on non-404 errors**. Swallowing all exceptions and returning `$false` causes a spurious create attempt, which then fails with a confusing error.
 - Bulk `Get-Ado*` functions are still useful for audit (where you need the full live state to find orphans) but should not be used in `apply`'s hot path.

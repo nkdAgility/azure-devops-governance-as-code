@@ -1,0 +1,60 @@
+# programs/odyssey/cadence.yaml
+# Iteration cadence for the Odyssey program.
+# Controls how Year → Season → Sprint iteration paths are generated in ADO.
+#
+# Execution year:
+#   Starts on the first Monday of February.
+#   Seasons: S1 (Feb-May)  S2 (Jun-Oct)  S3 (Oct-Jan)
+#   Standard sprint: 3 working weeks = 19 calendar days (Mon-Fri).
+#   Some final season sprints are shortened to align season/year boundaries.
+
+iterations:
+  yearHorizon: 2            # how many execution years ahead to generate
+
+  defaultSprintWeeks: 3     # standard sprint length (Mon to Fri, 3 weeks)
+
+  seasons:
+    - id: S1                # February to late May
+      sprints: 6
+      finalSprintWeeks: 2   # last sprint shortened for season boundary
+    - id: S2                # June to early October
+      sprints: 6
+      finalSprintWeeks: 3   # all sprints are standard length
+    - id: S3                # October to late January (next calendar year)
+      sprints: 6
+      finalSprintWeeks: 2   # last sprint shortened for season boundary
+
+  # Iteration scope: how many sprints/seasons back and forward each team type tracks.
+  # Computed from the current sprint/season at reconcile time.
+  teamDefaults:
+    sprints:
+      back: 10
+      forward: 10
+
+  portfolioDefaults:
+    seasons:
+      back: 3
+      forward: 3
+
+# Team types drive per-team planning behaviour. Position in the hierarchy
+# supplies the default type (program root / product -> portfolio, node with
+# child teams -> structural, leaf -> delivery); hierarchy.yaml can override
+# per node with `type:` and `iterations:` (sprints | seasons | none).
+#
+# includeSubAreas: portfolio and structural teams view down over their whole
+# subtree; delivery teams own only their leaf area.
+# backlogs: the backlog levels visible to the team (names must match the
+# process backlog level names in ADO).
+teamTypes:
+  portfolio:                # program root + product "(portfolio)" teams
+    includeSubAreas: true
+    backlogs: [God Mode]
+    iterations: seasons
+  structural:               # container teams that give a view down, no direct work
+    includeSubAreas: true
+    backlogs: [God Mode, Epics]
+    iterations: seasons
+  delivery:                 # people doing the work
+    includeSubAreas: false
+    backlogs: [Features, Backlog items]
+    iterations: sprints

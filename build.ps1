@@ -25,7 +25,7 @@
     pwsh ./build.ps1 build                        # build every program
     pwsh ./build.ps1 build    -Program odyssey # build one program
     pwsh ./build.ps1 validate
-    pwsh ./build.ps1 plan  -Program odyssey -Org example-org
+    pwsh ./build.ps1 plan  -Program odyssey -Org nkdagility-preview
 #>
 [CmdletBinding()]
 param(
@@ -36,7 +36,16 @@ param(
     [string]$Program,
     [string]$Org,
     [switch]$WhatIf,
-    [switch]$Prune
+    [switch]$Prune,
+
+    # Root folder containing program definitions (programs/<name>/). Defaults to
+    # this repo's programs/. Client repos point this at their own governance
+    # config so this script doubles as a reusable shell around the module.
+    [string]$ProgramsRoot,
+
+    # Root folder for build artifacts (out/<name>/resolved.yaml). Defaults to
+    # this repo's out/. Client repos pass their own so artifacts stay with them.
+    [string]$OutputRoot
 )
 
 $ErrorActionPreference = 'Stop'
@@ -57,8 +66,10 @@ Commands:
   audit     Read-only compliance report
 
 Options:
-  -Program  Target one program under programs/ (default: all programs)
-  -Org      Override the org declared in the program manifest.yaml
+  -Program      Target one program under the programs root (default: all)
+  -ProgramsRoot Folder containing program definitions (default: ./programs)
+  -OutputRoot   Folder for build artifacts (default: ./out)
+  -Org          Override the org declared in the program manifest.yaml
   -WhatIf   (apply) Show what would change without making any changes
   -Prune    (apply) DELETE resources in ADO that are not in the config
             (orphan teams, area paths, repos, extra group members).
@@ -76,8 +87,8 @@ Examples:
 }
 
 $moduleManifest = Join-Path $PSScriptRoot 'module/AdoGovernance/AdoGovernance.psd1'
-$programsRoot   = Join-Path $PSScriptRoot 'programs'
-$buildRoot      = Join-Path $PSScriptRoot 'out'
+$programsRoot   = if ($ProgramsRoot) { (Resolve-Path $ProgramsRoot).Path } else { Join-Path $PSScriptRoot 'programs' }
+$buildRoot      = if ($OutputRoot)   { $OutputRoot }                       else { Join-Path $PSScriptRoot 'out' }
 
 # 1. self-install external dependencies (once)
 foreach ($dep in 'powershell-yaml') {

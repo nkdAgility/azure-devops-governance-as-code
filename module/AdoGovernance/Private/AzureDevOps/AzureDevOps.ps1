@@ -218,7 +218,16 @@ function Invoke-AdoRest {
         [Text.Encoding]::ASCII.GetBytes(":$($env:AZURE_DEVOPS_EXT_PAT)"))
     # Accept: application/json is required — without it ADO returns an HTML page (HTTP 203).
     $headers = @{ Authorization = "Basic $encoded"; Accept = 'application/json' }
-    $uri     = "$($OrgUrl.TrimEnd('/'))/$Path"
+    # The Graph resource area lives on the SPS host (vssps.dev.azure.com /
+    # {org}.vssps.visualstudio.com), not the core host — calling it on
+    # dev.azure.com fails with 404 or "controller not found" on every org.
+    $effectiveOrgUrl = $OrgUrl
+    if ($Path -match '^_apis/graph(/|\?|$)') {
+        $effectiveOrgUrl = $OrgUrl `
+            -replace '^https://dev\.azure\.com/', 'https://vssps.dev.azure.com/' `
+            -replace '^https://([^./]+)\.visualstudio\.com', 'https://$1.vssps.visualstudio.com'
+    }
+    $uri     = "$($effectiveOrgUrl.TrimEnd('/'))/$Path"
     $sep     = if ($uri.Contains('?')) { '&' } else { '?' }
     $uri    += "${sep}api-version=$ApiVersion"
 

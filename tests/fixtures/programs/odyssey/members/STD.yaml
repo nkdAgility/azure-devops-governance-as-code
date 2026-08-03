@@ -1,0 +1,6 @@
+# Membership for the STD product (portfolio) groups.
+reader: []
+portfolioManager: []
+admin:
+  - upn: alex.rivers@example.com
+    reason: "Portal program owner - structural authority over Portal and each Portal-adjacent product (delegated ownership). Not a team member or contributor."

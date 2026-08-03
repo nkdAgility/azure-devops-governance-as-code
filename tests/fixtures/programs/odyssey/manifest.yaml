@@ -1,0 +1,30 @@
+# programs/odyssey/manifest.yaml — program identity + connection.
+#
+# accessToken is a REFERENCE, never the token itself:
+#   $Env:NAME  or  ${Env:NAME}  reads that environment variable at run time.
+# The token is resolved only for plan/apply/audit and is never written to out/.
+
+program:     Odyssey
+org:         nkdagility-preview
+accessToken: $Env:AZDEVOPS_DEV_PAT
+
+# Target ADO project. Created by apply when missing (plan/WhatIf only reports).
+# All fields are optional: name defaults to the program name, process to Agile,
+# visibility to private, sourceControl to git. process/visibility/sourceControl
+# only matter at creation time — ADO cannot change them on an existing project.
+project:
+  name:          Odyssey
+  process:       nkdScrum
+  visibility:    private
+  sourceControl: git
+
+# Optional behaviour settings.
+settings:
+  # prune: when true, `apply` DELETES resources that exist in ADO but are not
+  # in the resolved model — orphan teams, orphan area paths (work items are
+  # reparented to the parent node), orphan repos (soft-deleted, recoverable
+  # from the recycle bin for ~30 days), and extra group members.
+  # scope:future placeholders, the project default team/repo, and iteration
+  # paths are never pruned. Default false: orphans are only reported as
+  # audit exceptions. Can also be enabled per run with `apply -Prune`.
+  prune: false
