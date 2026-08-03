@@ -33,5 +33,16 @@ function Invoke-GovernanceAudit {
     $reportPath = Join-Path (Split-Path $ResolvedPath -Parent) 'audit-report.txt'
 
     Write-Host "Auditing '$($resolved.program)' in $orgUrl" -ForegroundColor Cyan
+
+    # The target project is itself a governed resource: if it is missing, every
+    # downstream check would fail with noise, so report the one real finding.
+    $projectDecl = $resolved.project
+    $projectName = if ($projectDecl -and $projectDecl.name) { $projectDecl.name } else { $resolved.program }
+    if (-not (Test-AdoProject -OrgUrl $orgUrl -Project $projectName)) {
+        Write-Host "  [MISSING] project: $projectName" -ForegroundColor Red
+        Write-Error "Governance compliance: project '$projectName' does not exist in $orgUrl — every governed resource is missing."
+        return
+    }
+
     Invoke-GovernanceReconcile -Resolved $resolved -OrgUrl $orgUrl -Mode 'Audit' -ReportPath $reportPath -TeamIds $teamIds | Out-Null
 }

@@ -41,6 +41,17 @@ function Test-ResolvedGovernance {
     $forbidden        = '[\\/:*?"<>|#$&+]'
     $forbiddenInTeams = '[,"/\\[\]:!|<>+=;?*@~''&$#]'   # ADO team name forbidden chars
 
+    # Project declaration: process is free-form (custom templates allowed), but
+    # visibility and sourceControl must be values az devops project create accepts.
+    if ($Resolved.project) {
+        if ($Resolved.project.visibility -notin @('private', 'public')) {
+            $issues.Add("Project visibility must be 'private' or 'public', got '$($Resolved.project.visibility)'")
+        }
+        if ($Resolved.project.sourceControl -notin @('git', 'tfvc')) {
+            $issues.Add("Project sourceControl must be 'git' or 'tfvc', got '$($Resolved.project.sourceControl)'")
+        }
+    }
+
     # Unique code chains (the global ownership keys, e.g. PTL-FND). Leaf shorts may
     # repeat across products; the product-qualified code must be unique.
     $codes = @($Resolved.areaPaths | Where-Object { $_.code } | ForEach-Object { $_.code })

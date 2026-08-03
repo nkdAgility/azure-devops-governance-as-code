@@ -16,6 +16,44 @@ Describe 'Compile stage' {
         $script:outputPath | Should -Exist
     }
 
+    It 'resolves the project declaration from the manifest' {
+        $script:resolved.project | Should -Not -BeNullOrEmpty
+        $script:resolved.project.name          | Should -Be 'Odyssey'
+        $script:resolved.project.process       | Should -Be 'nkdScrum'
+        $script:resolved.project.visibility    | Should -Be 'private'
+        $script:resolved.project.sourceControl | Should -Be 'git'
+    }
+
+    It 'defaults the project declaration when the manifest has no project block' {
+        InModuleScope AdoGovernance {
+            $resolved = Resolve-Governance -Manifest @{ program = 'Demo'; org = 'demo-org' } `
+                -Source @{ products = @() } `
+                -Access @{ teamGroups = @(); containerGroups = @(); roles = @{};
+                           stakeholders = @{ accessLevel = 'stakeholder'; ado = 'Demo-Stakeholders'; scope = 'org' } } `
+                -SourceHash 'testhash'
+            $resolved.project.name          | Should -Be 'Demo'
+            $resolved.project.process       | Should -Be 'Agile'
+            $resolved.project.visibility    | Should -Be 'private'
+            $resolved.project.sourceControl | Should -Be 'git'
+        }
+    }
+
+    It 'rejects an invalid project visibility' {
+        InModuleScope AdoGovernance {
+            $issues = Test-ResolvedGovernance -Resolved @{
+                project = @{ visibility = 'internal'; sourceControl = 'git' }; areaPaths = @(); teams = @() }
+            $issues | Should -Contain "Project visibility must be 'private' or 'public', got 'internal'"
+        }
+    }
+
+    It 'rejects an invalid project sourceControl' {
+        InModuleScope AdoGovernance {
+            $issues = Test-ResolvedGovernance -Resolved @{
+                project = @{ visibility = 'private'; sourceControl = 'svn' }; areaPaths = @(); teams = @() }
+            $issues | Should -Contain "Project sourceControl must be 'git' or 'tfvc', got 'svn'"
+        }
+    }
+
     It 'emits the program root area path' {
         $script:resolved.areaPaths.path | Should -Contain '\Odyssey'
     }
@@ -30,10 +68,8 @@ Describe 'Compile stage' {
         ($script:resolved.teams | Where-Object name -eq 'Portal · Foundation') | Should -Not -BeNullOrEmpty
     }
 
-    It 'nests sub-teams (Open API under Foundation)' {
-        $openApi = $script:resolved.teams | Where-Object name -eq 'Portal · Foundation · Open API'
-        $openApi.parent | Should -Be 'Portal · Foundation'
-        $openApi.defaultAreaPath | Should -Be '\Odyssey\Portal\Platform\Foundation\Open API'
+    It 'does not create an Open API team (Open API is a tag, not a team)' {
+        ($script:resolved.teams | Where-Object name -like '*Open API*') | Should -BeNullOrEmpty
     }
 
     It 'routes Colors ownership into the Graphics Pipeline (GPI) area config' {
@@ -98,12 +134,80 @@ Describe 'Compile stage' {
     It 'derives iteration scope from team type (portfolio seasons, delivery sprints)' {
         ($script:resolved.teams | Where-Object name -eq 'Portal DS (portfolio)').iterationScope | Should -Be 'seasons'
         ($script:resolved.teams | Where-Object short -eq 'GPI').iterationScope | Should -Be 'sprints'
-        ($script:resolved.teams | Where-Object name -eq 'Portal · Foundation · Open API').iterationScope | Should -Be 'sprints'
     }
 
     It 'derives backlog levels from team type via cadence.yaml' {
-        @(($script:resolved.teams | Where-Object short -eq 'GPI').backlogs) | Should -Be @('Requirements', 'Stories')
-        @(($script:resolved.teams | Where-Object name -eq 'Odyssey').backlogs) | Should -Be @('Initiatives')
+        @(($script:resolved.teams | Where-Object short -eq 'GPI').backlogs) | Should -Be @('Features', 'Backlog items')
+        @(($script:resolved.teams | Where-Object name -eq 'Odyssey').backlogs) | Should -Be @('God Mode')
+    }
+
+    It 'emits an admin group on every team (structural authority role)' {
+        ($script:resolved.teams | Where-Object short -eq 'GPI').securityGroups.ado | Should -Contain 'PTL-GPI-Admins'
+        ($script:resolved.teams | Where-Object name -eq 'Portal (portfolio)').securityGroups.ado | Should -Contain 'PTL-Admins'
+    }
+
+    It 'grants Alex structural authority on Portal and each adjacent product' {
+        foreach ($code in @('PTL', 'PDS', 'MLP', 'OFP', 'STD', 'VIS')) {
+            $team  = $script:resolved.teams | Where-Object codePath -eq $code
+            $admin = $team.securityGroups | Where-Object role -eq 'admin'
+            @($admin.members).Count | Should -Be 1 -Because "$code should have exactly one admin"
+            $admin.members[0].upn | Should -BeLike 'alex*'
+            $admin.members[0].reason | Should -Not -BeNullOrEmpty
+        }
+    }
+
+    It 'grants Jordan structural authority on Foundation with a recorded reason' {
+        $fnd   = $script:resolved.teams | Where-Object codePath -eq 'PTL-FND'
+        $admin = $fnd.securityGroups | Where-Object role -eq 'admin'
+        $admin.members[0].upn | Should -BeLike 'jordan*'
+        $admin.members[0].reason | Should -Match 'structural authority'
+    }
+
+    It 'projects structural authority entries covering the governed area paths' {
+        $ptl = $script:resolved.structuralAuthority | Where-Object group -eq 'PTL-Admins'
+        $ptl | Should -Not -BeNullOrEmpty
+        $ptl.paths | Should -Contain '\Odyssey\Portal'
+        $gpi = $script:resolved.structuralAuthority | Where-Object group -eq 'PTL-GPI-Admins'
+        $gpi.paths | Should -Contain '\Odyssey\Colors'
+    }
+
+    It 'excludes expired member entries from the desired state' {
+        InModuleScope AdoGovernance {
+            $resolved = Resolve-Governance -Manifest @{ program = 'Demo'; org = 'demo-org' } `
+                -Source @{ products = @() } `
+                -Access @{ teamGroups = @(); roles = @{};
+                           containerGroups = @(@{ role = 'reader'; ado = '{key}-Readers' });
+                           stakeholders = @{ accessLevel = 'stakeholder'; ado = 'Demo-Stakeholders'; scope = 'org' } } `
+                -SourceHash 'testhash' `
+                -Members @{ Demo = @{ reader = @(
+                    @{ upn = 'expired@corp.com'; reason = 'guest'; expires = '2000-01-01' },
+                    @{ upn = 'active@corp.com';  reason = 'ongoing' }
+                ) } }
+            $readers = ($resolved.teams | Where-Object name -eq 'Demo').securityGroups |
+                Where-Object role -eq 'reader'
+            @($readers.members).Count | Should -Be 1
+            $readers.members[0].upn | Should -Be 'active@corp.com'
+        }
+    }
+
+    It 'fails the build when an active team has no members file (governance active)' {
+        InModuleScope AdoGovernance {
+            {
+                Resolve-Governance -Manifest @{ program = 'Demo'; org = 'demo-org' } `
+                    -Source @{ products = @(@{ name = 'Prod'; short = 'PRD' }) } `
+                    -Access @{ teamGroups = @(); roles = @{};
+                               containerGroups = @(@{ role = 'reader'; ado = '{key}-Readers' });
+                               stakeholders = @{ accessLevel = 'stakeholder'; ado = 'S'; scope = 'org' } } `
+                    -SourceHash 'testhash' `
+                    -Members @{ Demo = @{ reader = @() } }
+            } | Should -Throw '*members file missing*'
+        }
+    }
+
+    It 'resolves the governed tag taxonomy from hierarchy.yaml' {
+        $script:resolved.tags | Should -Not -BeNullOrEmpty
+        $script:resolved.tags.sanctioned | Should -Contain 'Open API'
+        @($script:resolved.tags.disallowedPatterns).Count | Should -BeGreaterThan 0
     }
 
     It 'generates iteration paths from cadence.yaml' {

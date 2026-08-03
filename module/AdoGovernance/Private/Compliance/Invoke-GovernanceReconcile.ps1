@@ -37,7 +37,9 @@ function Invoke-GovernanceReconcile {
     )
 
     $findings = [System.Collections.Generic.List[string]]::new()
-    $project  = $Resolved.program
+    # Target project comes from the manifest project block; fall back to the
+    # program name for resolved files built before the project declaration existed.
+    $project  = if ($Resolved.project -and $Resolved.project.name) { $Resolved.project.name } else { $Resolved.program }
     $doFix    = ($Mode -eq 'Apply')
 
     # output helpers
@@ -334,8 +336,20 @@ function Invoke-GovernanceReconcile {
             }
 
             if (-not $groupExists) { continue }
-            $members = @($grp.members | Where-Object { $_ -match '@' })
-            if ($members.Count -eq 0) { continue }
+
+            # Entries are objects ({upn}/{group} + reason/expires, normalized at
+            # build time); legacy plain UPN strings still accepted. An EMPTY list
+            # is enforced — the group must have no members, extras are drift.
+            $userEntries  = [System.Collections.Generic.List[object]]::new()
+            $groupEntries = [System.Collections.Generic.List[object]]::new()
+            foreach ($e in @($grp.members | Where-Object { $_ })) {
+                if ($e -is [string]) {
+                    if ($e -match '@') { $userEntries.Add(@{ upn = $e }) }
+                    continue
+                }
+                if ($e.upn)   { $userEntries.Add($e);  continue }
+                if ($e.group) { $groupEntries.Add($e); continue }
+            }
 
             $descriptor = $liveGroups[$grp.ado]
             if (-not $descriptor) { continue }
@@ -345,11 +359,12 @@ function Invoke-GovernanceReconcile {
                 $desiredDescs = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::OrdinalIgnoreCase)
                 $unresolved   = $false
 
-                foreach ($m in $members) {
-                    $mDesc = Find-AdoUserDescriptor -OrgUrl $OrgUrl -Upn $m
+                foreach ($m in $userEntries) {
+                    $upn   = [string]$m.upn
+                    $mDesc = Find-AdoUserDescriptor -OrgUrl $OrgUrl -Upn $upn
                     if (-not $mDesc) {
-                        $findings.Add("UNRESOLVABLE member '$m' in '$($grp.ado)'")
-                        & $rError "unresolvable user '$m' in '$($grp.ado)'"
+                        $findings.Add("UNRESOLVABLE member '$upn' in '$($grp.ado)'")
+                        & $rError "unresolvable user '$upn' in '$($grp.ado)'"
                         $unresolved = $true
                         continue
                     }
@@ -358,15 +373,43 @@ function Invoke-GovernanceReconcile {
                         if ($doFix) {
                             try {
                                 Add-AdoGroupMember -OrgUrl $OrgUrl -MemberDescriptor $mDesc -ContainerDescriptor $descriptor
-                                & $rCreated "member: $m -> $($grp.ado)"
+                                & $rCreated "member: $upn -> $($grp.ado)"
                             } catch {
-                                $findings.Add("ERROR adding member '$m' to '$($grp.ado)': $_")
-                                & $rError "add member '$m' to '$($grp.ado)': $_"
+                                $findings.Add("ERROR adding member '$upn' to '$($grp.ado)': $_")
+                                & $rError "add member '$upn' to '$($grp.ado)': $_"
                             }
                         } else {
-                            $findings.Add("MISSING member '$m' in '$($grp.ado)'")
-                            if ($Mode -eq 'WhatIf') { & $rWould "add member: $m -> $($grp.ado)" }
-                            else                     { & $rMissing "member: $m in $($grp.ado)" }
+                            $findings.Add("MISSING member '$upn' in '$($grp.ado)'")
+                            if ($Mode -eq 'WhatIf') { & $rWould "add member: $upn -> $($grp.ado)" }
+                            else                     { & $rMissing "member: $upn in $($grp.ado)" }
+                        }
+                    }
+                }
+
+                # Nested groups declared in config (e.g. Entra groups).
+                foreach ($g in $groupEntries) {
+                    $gName = [string]$g.group
+                    $gDesc = Find-AdoGroupDescriptor -OrgUrl $OrgUrl -Project $project -Name $gName -ProjectGroups $liveGroups
+                    if (-not $gDesc) {
+                        $findings.Add("UNRESOLVABLE nested group '$gName' in '$($grp.ado)'")
+                        & $rError "unresolvable nested group '$gName' in '$($grp.ado)'"
+                        $unresolved = $true
+                        continue
+                    }
+                    $desiredDescs.Add($gDesc) | Out-Null
+                    if (-not $liveMembers.ContainsKey($gDesc)) {
+                        if ($doFix) {
+                            try {
+                                Add-AdoGroupMember -OrgUrl $OrgUrl -MemberDescriptor $gDesc -ContainerDescriptor $descriptor
+                                & $rCreated "nested group: $gName -> $($grp.ado)"
+                            } catch {
+                                $findings.Add("ERROR adding nested group '$gName' to '$($grp.ado)': $_")
+                                & $rError "add nested group '$gName' to '$($grp.ado)': $_"
+                            }
+                        } else {
+                            $findings.Add("MISSING nested group '$gName' in '$($grp.ado)'")
+                            if ($Mode -eq 'WhatIf') { & $rWould "add nested group: $gName -> $($grp.ado)" }
+                            else                     { & $rMissing "nested group: $gName in $($grp.ado)" }
                         }
                     }
                 }
@@ -567,7 +610,11 @@ function Invoke-GovernanceReconcile {
     }
 
     # ── 4. Team iteration scope — runs after both teams and iteration paths exist ──
-    if ($Resolved.iterations -and $Resolved.iterations.config -and $doFix) {
+    # Exact-match: each team subscribes to precisely its in-scope window.
+    # Out-of-window subscriptions are drift and are REMOVED in apply — the
+    # iteration PATHS themselves are never touched (ADR-005), only the team's
+    # view of them. Runs in all modes so audit reports subscription drift too.
+    if ($Resolved.iterations -and $Resolved.iterations.config) {
         Write-Host "`n--- Team iteration scope ---" -ForegroundColor Cyan
 
         $itCfg   = $Resolved.iterations.config
@@ -580,45 +627,68 @@ function Invoke-GovernanceReconcile {
         $pFwd     = if ($itCfg.portfolioDefaults.seasons.forward) { [int]$itCfg.portfolioDefaults.seasons.forward } else { 3 }
 
         $iterIdCache = @{}
+        # The root iteration subscription is set by Initialize-AdoTeamDefaults so
+        # team settings PATCH calls succeed — it is never treated as an extra.
+        $iterRootId  = $null
+        try { $iterRootId = Get-AdoIterationRootId -OrgUrl $OrgUrl -Project $project }
+        catch { & $rError "root iteration node: $_" }
 
         foreach ($team in ($Resolved.teams | Where-Object { $_.scope -ne 'future' -and $_.name -ne $project })) {
+            # Team missing entirely — already flagged in the Teams section.
+            if (-not $liveTeamNames.Contains($team.name)) { continue }
+
             # iterationScope comes from the team's type (portfolio/structural ->
             # seasons, delivery -> sprints) or a per-node override; kind is the
             # fallback for resolved models built before team types existed.
+            # 'none' means an empty desired window — everything but root is drift.
             $scope = if ($team.iterationScope) { [string]$team.iterationScope }
                      elseif ($team.kind -in @('portfolio', 'product')) { 'seasons' }
                      else { 'sprints' }
-            if ($scope -eq 'none') {
-                & $rOk "team: $($team.name)  (iteration scope: none)"
-                continue
+            $scopePaths = switch ($scope) {
+                'none'    { @() }
+                'seasons' { @(Get-InScopeSeasonPaths -Calendar $calendar -Back $pBack -Forward $pFwd) }
+                default   { @(Get-InScopeSprintPaths -Calendar $calendar -Back $tBack -Forward $tFwd) }
             }
-            $scopePaths = if ($scope -eq 'seasons') {
-                Get-InScopeSeasonPaths -Calendar $calendar -Back $pBack -Forward $pFwd
-            } else {
-                Get-InScopeSprintPaths -Calendar $calendar -Back $tBack -Forward $tFwd
+
+            $desiredIds = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::OrdinalIgnoreCase)
+            foreach ($iterPath in $scopePaths) {
+                $guid = if ($iterIdCache.ContainsKey($iterPath)) { $iterIdCache[$iterPath] }
+                        else {
+                            try { $id = Get-AdoIterationId -OrgUrl $OrgUrl -Project $project -ResolvedPath $iterPath
+                                  $iterIdCache[$iterPath] = $id; $id
+                            } catch { $null }   # path missing — already flagged in Iterations section
+                        }
+                if ($guid) { $desiredIds.Add($guid) | Out-Null }
             }
-            if ($scopePaths.Count -eq 0) { continue }
 
             try {
                 $currentIds = Get-AdoTeamIterationSet -OrgUrl $OrgUrl -Project $project -Team $team.name
-                $added = 0
-                foreach ($iterPath in $scopePaths) {
-                    $guid = if ($iterIdCache.ContainsKey($iterPath)) { $iterIdCache[$iterPath] }
-                            else {
-                                try { $id = Get-AdoIterationId -OrgUrl $OrgUrl -Project $project -ResolvedPath $iterPath
-                                      $iterIdCache[$iterPath] = $id; $id
-                                } catch { $null }
-                            }
-                    if (-not $guid) { continue }
-                    if (-not $currentIds.ContainsKey($guid)) {
+                $missingIds = @($desiredIds | Where-Object { -not $currentIds.ContainsKey($_) })
+                $extraIds   = @($currentIds.Keys | Where-Object {
+                    $_ -ne $iterRootId -and -not $desiredIds.Contains($_) })
+
+                if ($missingIds.Count -eq 0 -and $extraIds.Count -eq 0) {
+                    & $rOk "team: $($team.name)  (iteration scope current: $scope)"
+                } elseif ($doFix) {
+                    foreach ($guid in $missingIds) {
                         Add-AdoTeamIteration -OrgUrl $OrgUrl -Project $project -Team $team.name -IterationId $guid
-                        $added++
                     }
+                    foreach ($guid in $extraIds) {
+                        Remove-AdoTeamIteration -OrgUrl $OrgUrl -Project $project -Team $team.name -IterationId $guid
+                    }
+                    & $rFixed "team: $($team.name)  (+$($missingIds.Count)/-$($extraIds.Count) iteration subscription(s))"
+                } else {
+                    if ($missingIds.Count -gt 0) {
+                        $findings.Add("DRIFT team '$($team.name)': $($missingIds.Count) in-scope iteration(s) not subscribed")
+                    }
+                    if ($extraIds.Count -gt 0) {
+                        $findings.Add("DRIFT team '$($team.name)': $($extraIds.Count) iteration subscription(s) outside the scope window")
+                    }
+                    if ($Mode -eq 'WhatIf') { & $rWould "correct iteration scope for team: $($team.name) (+$($missingIds.Count)/-$($extraIds.Count))" }
+                    else                     { & $rDrift "team: $($team.name)  iteration scope (+$($missingIds.Count)/-$($extraIds.Count))" }
                 }
-                if ($added -gt 0) { & $rFixed "team: $($team.name)  ($added iteration(s) added to scope)" }
-                else               { & $rOk    "team: $($team.name)  (iteration scope current)" }
             } catch {
-                $findings.Add("ERROR setting iteration scope for '$($team.name)': $_")
+                $findings.Add("ERROR reconciling iteration scope for '$($team.name)': $_")
                 & $rError "iteration scope for '$($team.name)': $_"
             }
         }
@@ -684,6 +754,114 @@ function Invoke-GovernanceReconcile {
         }
     }
 
+    # ── 6. Structural authority (area node ACLs) ──────────────────────────────
+    # Each {key}-Admins group must hold node-admin bits (read/write/delete) on
+    # every area path its team governs (Decision-0028 delegated ownership).
+    # Team-administrator assignment is a pending spike — see AzureDevOps.ps1.
+    $authorityEntries = @($Resolved.structuralAuthority | Where-Object { $_ })
+    if ($authorityEntries.Count -gt 0) {
+        Write-Host "`n--- Structural authority ---" -ForegroundColor Cyan
+
+        $authIdentity = @{}   # subjectDescriptor -> securityIdentityDescriptor
+        $authTokens   = @{}   # area path -> CSS token
+        foreach ($entry in $authorityEntries) {
+            $subjectDesc = $liveGroups[$entry.group]
+            if (-not $subjectDesc) { continue }   # group missing — flagged in the groups section
+
+            if (-not $authIdentity.ContainsKey($subjectDesc)) {
+                $authIdentity[$subjectDesc] = Get-AdoGroupIdentityDescriptor -OrgUrl $OrgUrl -SubjectDescriptor $subjectDesc
+            }
+            $identityDesc = $authIdentity[$subjectDesc]
+            if (-not $identityDesc) {
+                $findings.Add("DRIFT structural authority: cannot resolve security identity for '$($entry.group)'")
+                & $rError "structural authority: identity for '$($entry.group)'"
+                continue
+            }
+
+            foreach ($path in @($entry.paths)) {
+                if (-not $liveAreas.ContainsKey($path)) { continue }   # area missing — already flagged
+                try {
+                    if (-not $authTokens.ContainsKey($path)) {
+                        $authTokens[$path] = Get-AdoAreaNodeToken -OrgUrl $OrgUrl -Project $project -ResolvedPath $path
+                    }
+                    $token  = $authTokens[$path]
+                    $acl    = Get-AdoAreaNodeAcl -OrgUrl $OrgUrl -Token $token
+                    $actual = if ($acl.ContainsKey($identityDesc)) { [int]$acl[$identityDesc] } else { 0 }
+                    if (($actual -band $script:AreaNodeAdminBits) -eq $script:AreaNodeAdminBits) {
+                        & $rOk "authority: $($entry.group) on $path"
+                    } elseif ($doFix) {
+                        try {
+                            Set-AdoAreaNodeAce -OrgUrl $OrgUrl -Token $token `
+                                -IdentityDescriptor $identityDesc -AllowBits $script:AreaNodeAdminBits
+                            & $rFixed "authority: $($entry.group) on $path"
+                        } catch {
+                            $findings.Add("ERROR granting structural authority to '$($entry.group)' on '$path': $_")
+                            & $rError "grant authority '$($entry.group)' on '$path': $_"
+                        }
+                    } else {
+                        $findings.Add("DRIFT structural authority: '$($entry.group)' lacks node-admin rights on '$path' (allow=$actual, need $script:AreaNodeAdminBits)")
+                        if ($Mode -eq 'WhatIf') { & $rWould "grant node-admin to $($entry.group) on $path" }
+                        else                     { & $rDrift "authority: $($entry.group) on $path" }
+                    }
+                } catch {
+                    $findings.Add("ERROR reading node ACL for '$path': $_")
+                    & $rError "node ACL for '$path': $_"
+                }
+            }
+        }
+    }
+
+    # ── 7. Tags — governed taxonomy (Decision-0041) ───────────────────────────
+    # Disallowed patterns (build-id shaped) are ALWAYS drift; tags outside the
+    # sanctioned vocabulary are audit exceptions. Sanctioned tags cannot be
+    # pre-created (ADO purges unused tags) so their absence is not a finding.
+    if ($Resolved.tags) {
+        Write-Host "`n--- Tags ---" -ForegroundColor Cyan
+        try {
+            $liveTags   = Get-AdoTagSet -OrgUrl $OrgUrl -Project $project
+            $sanctioned = [System.Collections.Generic.HashSet[string]]::new(
+                [string[]]@($Resolved.tags.sanctioned), [System.StringComparer]::OrdinalIgnoreCase)
+            $patterns = @($Resolved.tags.disallowedPatterns)
+            $okCount  = 0
+
+            foreach ($tagName in ($liveTags.Keys | Sort-Object)) {
+                $disallowed = $false
+                foreach ($p in $patterns) { if ($tagName -match $p) { $disallowed = $true; break } }
+
+                if ($disallowed) {
+                    if ($Prune -and $doFix) {
+                        try {
+                            Remove-AdoTag -OrgUrl $OrgUrl -Project $project -TagId $liveTags[$tagName]
+                            & $rDeleted "tag: $tagName"
+                        } catch {
+                            $findings.Add("ERROR deleting disallowed tag '$tagName': $_")
+                            & $rError "delete tag '$tagName': $_"
+                        }
+                    } else {
+                        $findings.Add("DRIFT tag '$tagName': matches a disallowed pattern")
+                        if ($Prune -and $Mode -eq 'WhatIf') { & $rWould "delete disallowed tag: $tagName" }
+                        else                                { & $rDrift "tag: $tagName (disallowed pattern)" }
+                    }
+                } elseif (-not $sanctioned.Contains($tagName)) {
+                    if ($Prune -and $doFix) {
+                        try {
+                            Remove-AdoTag -OrgUrl $OrgUrl -Project $project -TagId $liveTags[$tagName]
+                            & $rDeleted "tag: $tagName"
+                        } catch {
+                            $findings.Add("ERROR deleting unsanctioned tag '$tagName': $_")
+                            & $rError "delete tag '$tagName': $_"
+                        }
+                    } else {
+                        $findings.Add("AUDIT EXCEPTION tag: $tagName")
+                        if ($Prune -and $Mode -eq 'WhatIf') { & $rWould "delete unsanctioned tag: $tagName" }
+                        else                                { & $rOrphan "tag: $tagName" }
+                    }
+                } else { $okCount++ }
+            }
+            Write-Host "  [ok]      $okCount sanctioned tag(s) in use ($($liveTags.Count) live total)" -ForegroundColor Green
+        } catch { & $rError "read tags: $_" }
+    }
+
     # ── Findings summary ──────────────────────────────────────────────────────
     $exceptions = @($findings | Where-Object { $_ -like 'AUDIT EXCEPTION*' })
     $missing    = @($findings | Where-Object { $_ -like 'MISSING*' })
@@ -740,6 +918,29 @@ function Invoke-GovernanceReconcile {
         if ($findings.Count -eq 0) { $lines.Add('COMPLIANT') } else { $lines.Add('NON-COMPLIANT') }
         Set-Content -Path $ReportPath -Value $lines -Encoding utf8
         Write-Host "`nReport written to: $ReportPath" -ForegroundColor Cyan
+
+        # Machine-readable twin of the text report — consumed by scheduled runs
+        # and, eventually, the compliance dashboard. Findings classified by prefix.
+        $jsonPath   = [System.IO.Path]::ChangeExtension($ReportPath, 'json')
+        $classified = @($findings | ForEach-Object {
+            $class = if ($_ -like 'MISSING*')              { 'missing' }
+                     elseif ($_ -like 'AUDIT EXCEPTION*')  { 'exception' }
+                     elseif ($_ -like 'UNRESOLVABLE*')     { 'unresolvable' }
+                     elseif ($_ -like 'ERROR*')            { 'error' }
+                     else                                  { 'drift' }
+            [ordered]@{ class = $class; message = $_ }
+        })
+        [ordered]@{
+            program      = $Resolved.program
+            project      = $project
+            org          = $OrgUrl
+            mode         = $Mode
+            generated    = (Get-Date).ToUniversalTime().ToString('o')
+            compliant    = ($findings.Count -eq 0)
+            findingCount = $findings.Count
+            findings     = $classified
+        } | ConvertTo-Json -Depth 5 | Set-Content -Path $jsonPath -Encoding utf8
+        Write-Host "JSON report written to: $jsonPath" -ForegroundColor Cyan
     }
 
     if ($findings.Count -gt 0 -and $Mode -eq 'Audit') {

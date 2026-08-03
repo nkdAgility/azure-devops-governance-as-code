@@ -59,18 +59,45 @@ function ConvertTo-AdoOrgUrl {
 }
 
 function Test-AdoProject {
-    <# Returns $true if the project exists in the org. #>
+    <#
+        .SYNOPSIS
+        Returns $true if the project exists in the org, via a single targeted
+        REST call. Only a genuine not-found returns $false; any other error
+        (auth, network) re-throws so the caller never mistakes a broken call
+        for a missing project.
+    #>
     [CmdletBinding()]
     param([string]$OrgUrl, [string]$Project)
-    az devops project show --organization $OrgUrl --project $Project --output none 2>$null
-    return ($LASTEXITCODE -eq 0)
+    try {
+        Invoke-AdoRest -OrgUrl $OrgUrl -Path "_apis/projects/$([Uri]::EscapeDataString($Project))" | Out-Null
+        return $true
+    } catch {
+        if ($_ -match '404|Not Found|does not exist') { return $false }
+        throw
+    }
 }
 
 function New-AdoProject {
+    <#
+        .SYNOPSIS
+        Creates a team project. Uses the az CLI because project creation is a
+        long-running ADO operation and the CLI polls it to completion, so the
+        project is ready for project-scoped calls when this returns.
+        Process accepts any template name, including custom inherited ones.
+    #>
     [CmdletBinding()]
-    param([string]$OrgUrl, [string]$Project)
-    az devops project create --organization $OrgUrl --name $Project --output none
-    if ($LASTEXITCODE -ne 0) { throw "Failed to create project '$Project'." }
+    param(
+        [string]$OrgUrl,
+        [string]$Project,
+        [string]$Process       = 'Agile',
+        [string]$Visibility    = 'private',
+        [string]$SourceControl = 'git'
+    )
+    az devops project create --organization $OrgUrl --name $Project `
+        --process $Process --visibility $Visibility --source-control $SourceControl --output none
+    if ($LASTEXITCODE -ne 0) {
+        throw "Failed to create project '$Project' (process: $Process, visibility: $Visibility, sourceControl: $SourceControl)."
+    }
 }
 
 function Test-AdoAreaPath {
@@ -574,6 +601,128 @@ function Set-AdoPipelineFolderAce {
         -Method 'POST' -Body $body | Out-Null
 }
 
+# ─── Area node security (structural authority) ────────────────────────────────
+# CSS is the security namespace guarding area path nodes. Structural authority
+# (Decision-0028) grants a delegated admin group edit/manage rights on a node
+# subtree without making its members contributors.
+
+$script:CssNamespaceId    = '83e28ad4-2d72-4ceb-97b0-c7726d5502c3'
+$script:AreaNodeAdminBits = 7   # GENERIC_READ(1) + GENERIC_WRITE(2) + DELETE(4)
+
+function Get-AdoAreaNodeToken {
+    <#
+        .SYNOPSIS
+        Builds the CSS security token for an area path: the chain of node GUIDs
+        from the root area node down to the target, each wrapped as
+        'vstfs:///Classification/Node/<guid>' and joined with ':'.
+        Throws when any node in the chain cannot be resolved.
+    #>
+    [CmdletBinding()]
+    param([string]$OrgUrl, [string]$Project, [string]$ResolvedPath)
+    $segments = $ResolvedPath.TrimStart('\') -split '\\'
+
+    $root = Invoke-AdoRest -OrgUrl $OrgUrl -Path "$Project/_apis/wit/classificationnodes/areas?`$depth=0"
+    if (-not $root.identifier) { throw "Get-AdoAreaNodeToken: no root area node for '$Project'." }
+    $ids = [System.Collections.Generic.List[string]]::new()
+    $ids.Add($root.identifier)
+
+    for ($i = 1; $i -lt $segments.Count; $i++) {
+        $sub = ($segments[1..$i] | ForEach-Object { [Uri]::EscapeDataString($_) }) -join '/'
+        $node = Invoke-AdoRest -OrgUrl $OrgUrl -Path "$Project/_apis/wit/classificationnodes/areas/$sub"
+        if (-not $node.identifier) { throw "Get-AdoAreaNodeToken: cannot resolve node '$($segments[$i])' in '$ResolvedPath'." }
+        $ids.Add($node.identifier)
+    }
+    return (($ids | ForEach-Object { "vstfs:///Classification/Node/$_" }) -join ':')
+}
+
+function Get-AdoAreaNodeAcl {
+    <# Returns a hashtable of securityIdentityDescriptor -> allowBits for the
+       explicit (non-inherited) ACEs on an area node token. Empty on none/error. #>
+    [CmdletBinding()]
+    param([string]$OrgUrl, [string]$Token)
+    $tokenEnc = [Uri]::EscapeDataString($Token)
+    $acl = @{}
+    try {
+        $result = Invoke-AdoRest -OrgUrl $OrgUrl `
+            -Path "_apis\accesscontrollists\$script:CssNamespaceId`?token=$tokenEnc&includeExtendedInfo=false&recurse=false"
+        foreach ($list in @($result.value)) {
+            foreach ($prop in $list.acesDictionary.PSObject.Properties) {
+                $acl[$prop.Name] = [int]$prop.Value.allow
+            }
+        }
+    } catch {
+        Write-Verbose "Get-AdoAreaNodeAcl: error reading ACL for token '$Token': $_"
+    }
+    return $acl
+}
+
+function Set-AdoAreaNodeAce {
+    <# Grants allow-bits to a security identity on an area node token.
+       merge=true so existing bits are OR-ed, never replaced. #>
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)][string]$OrgUrl,
+        [Parameter(Mandatory)][string]$Token,
+        [Parameter(Mandatory)][string]$IdentityDescriptor,
+        [Parameter(Mandatory)][int]$AllowBits
+    )
+    $body = @{
+        token = $Token
+        merge = $true
+        accessControlEntries = @(
+            @{ descriptor = $IdentityDescriptor; allow = $AllowBits; deny = 0 }
+        )
+    }
+    Invoke-AdoRest -OrgUrl $OrgUrl -Path "_apis\accesscontrolentries\$script:CssNamespaceId" `
+        -Method 'POST' -Body $body | Out-Null
+}
+
+# NOTE (spike pending): making the admin group a Team Administrator of the
+# teams under its node has no cleanly documented REST API (candidates: Identity
+# namespace ACE on the team identity, or the legacy AddTeamAdmins endpoint).
+# Until that spike lands, structural authority covers area node management only.
+
+function Find-AdoGroupDescriptor {
+    <# Resolves a group display name to its graph descriptor. Checks the
+       project-scoped set first, then org-scoped groups. Returns $null when
+       not found — callers must surface that as a finding, never swallow it. #>
+    [CmdletBinding()]
+    param([string]$OrgUrl, [string]$Project, [string]$Name, [hashtable]$ProjectGroups = @{})
+    if ($ProjectGroups.ContainsKey($Name)) { return $ProjectGroups[$Name] }
+    $json = az devops security group list --organization $OrgUrl --scope organization --output json 2>$null
+    if ($LASTEXITCODE -ne 0 -or [string]::IsNullOrWhiteSpace($json)) { return $null }
+    $parsed = $json | ConvertFrom-Json
+    $groups = if ($parsed -is [array]) { $parsed }
+              elseif ($null -ne $parsed.graphGroups) { $parsed.graphGroups }
+              else { @() }
+    foreach ($g in $groups) {
+        if ($g.displayName -eq $Name) { return $g.descriptor }
+    }
+    return $null
+}
+
+# ─── Tags (governed taxonomy) ─────────────────────────────────────────────────
+
+function Get-AdoTagSet {
+    <# Returns a hashtable of tag name -> tag id for the project.
+       NOTE: loads the full tag list — acceptable for governed projects; on a
+       legacy project with build-id tag pollution this can be very large. #>
+    [CmdletBinding()]
+    param([string]$OrgUrl, [string]$Project)
+    $set  = @{}
+    $data = Invoke-AdoRest -OrgUrl $OrgUrl -Path "$Project/_apis/wit/tags" -ApiVersion '7.1-preview.1'
+    foreach ($tag in @($data.value)) { if ($tag.name) { $set[$tag.name] = $tag.id } }
+    return $set
+}
+
+function Remove-AdoTag {
+    <# Deletes a work item tag by id. Removing a tag detaches it from all work items. #>
+    [CmdletBinding()]
+    param([string]$OrgUrl, [string]$Project, [string]$TagId)
+    Invoke-AdoRest -OrgUrl $OrgUrl -Path "$Project/_apis/wit/tags/$TagId" `
+        -Method 'DELETE' -ApiVersion '7.1-preview.1' | Out-Null
+}
+
 # ─── Bulk read helpers (used by audit) ───────────────────────────────────────
 
 function Get-AdoAreaPathSubtree {
@@ -781,16 +930,43 @@ function Get-AdoTeamIterationSet {
 }
 
 function Add-AdoTeamIteration {
-    <# Adds an iteration (by GUID) to a team's iteration list. Idempotent. #>
+    <# Adds an iteration (by GUID) to a team's iteration list. Idempotent.
+       Re-initialises team defaults and retries if TF400497 is raised (null backlog path). #>
     [CmdletBinding()]
     param([string]$OrgUrl, [string]$Project, [string]$Team, [string]$IterationId)
     $encoded = [Uri]::EscapeDataString($Team)
+    $apiPath = "$Project/$encoded/_apis/work/teamsettings/iterations"
     try {
-        Invoke-AdoRest -OrgUrl $OrgUrl -Path "$Project/$encoded/_apis/work/teamsettings/iterations" `
-            -Method 'POST' -Body @{ id = $IterationId } | Out-Null
+        Invoke-AdoRest -OrgUrl $OrgUrl -Path $apiPath -Method 'POST' -Body @{ id = $IterationId } | Out-Null
     } catch {
-        if ($_ -notmatch 'already exists|duplicate') { throw }
+        $errText = if ($_.ErrorDetails -and $_.ErrorDetails.Message) { $_.ErrorDetails.Message } else { "$_" }
+        if ($errText -match 'TF400497|backlog iteration') {
+            # backlogIteration is null/invalid — fix it, then retry once.
+            Initialize-AdoTeamDefaults -OrgUrl $OrgUrl -Project $Project -Team $Team
+            Invoke-AdoRest -OrgUrl $OrgUrl -Path $apiPath -Method 'POST' -Body @{ id = $IterationId } | Out-Null
+        } elseif ($errText -notmatch 'already exists|duplicate') {
+            throw
+        }
     }
+}
+
+function Remove-AdoTeamIteration {
+    <# Removes an iteration (by GUID) from a team's subscription list. The
+       iteration PATH is untouched (ADR-005) — only the team's view changes. #>
+    [CmdletBinding()]
+    param([string]$OrgUrl, [string]$Project, [string]$Team, [string]$IterationId)
+    $encoded = [Uri]::EscapeDataString($Team)
+    Invoke-AdoRest -OrgUrl $OrgUrl -Path "$Project/$encoded/_apis/work/teamsettings/iterations/$IterationId" `
+        -Method 'DELETE' | Out-Null
+}
+
+function Get-AdoIterationRootId {
+    <# Returns the GUID of the project's root iteration node. Throws if missing. #>
+    [CmdletBinding()]
+    param([string]$OrgUrl, [string]$Project)
+    $root = Invoke-AdoRest -OrgUrl $OrgUrl -Path "$Project/_apis/wit/classificationnodes/iterations?`$depth=0"
+    if (-not $root.identifier) { throw "Get-AdoIterationRootId: no root iteration node for '$Project'." }
+    return $root.identifier
 }
 
 function Get-AdoTeamBacklogLevels {
@@ -805,8 +981,18 @@ function Get-AdoTeamBacklogLevels {
     [CmdletBinding()]
     param([string]$OrgUrl, [string]$Project, [string]$Team)
     $encoded = [Uri]::EscapeDataString($Team)
-    $data    = Invoke-AdoRest -OrgUrl $OrgUrl -Path "$Project/$encoded/_apis/work/backlogs"
-    $levels  = @($data.value | Where-Object { $_.type -ne 'iteration' } |
+    $apiPath = "$Project/$encoded/_apis/work/backlogs"
+    try {
+        $data = Invoke-AdoRest -OrgUrl $OrgUrl -Path $apiPath
+    } catch {
+        $errText = if ($_.ErrorDetails -and $_.ErrorDetails.Message) { $_.ErrorDetails.Message } else { "$_" }
+        if ($errText -match 'TF400497|backlog iteration') {
+            Initialize-AdoTeamDefaults -OrgUrl $OrgUrl -Project $Project -Team $Team
+            $data = Invoke-AdoRest -OrgUrl $OrgUrl -Path $apiPath
+        } else { throw }
+    }
+    # Exclude 'task' and 'iteration' types — ADO does not allow toggling their visibility.
+    $levels  = @($data.value | Where-Object { $_.type -notin @('iteration', 'task') } |
         ForEach-Object { [ordered]@{ id = $_.id; name = $_.name } })
     if ($levels.Count -eq 0) {
         throw "Get-AdoTeamBacklogLevels: no backlog levels returned for team '$Team' in '$Project'."

@@ -42,6 +42,25 @@ function Invoke-GovernanceApply {
     $modeLabel    = if ($pruneEnabled) { "$mode + prune" } else { $mode }
 
     Write-Host "Applying '$($resolved.program)' in $orgUrl  [mode: $modeLabel]" -ForegroundColor Cyan
+
+    # The target project must exist before any project-scoped reconcile call.
+    $projectDecl = $resolved.project
+    $projectName = if ($projectDecl -and $projectDecl.name) { $projectDecl.name } else { $resolved.program }
+    if (-not (Test-AdoProject -OrgUrl $orgUrl -Project $projectName)) {
+        $creationSpec = "process: $($projectDecl.process), visibility: $($projectDecl.visibility), sourceControl: $($projectDecl.sourceControl)"
+        if ($mode -eq 'Apply') {
+            New-AdoProject -OrgUrl $orgUrl -Project $projectName -Process $projectDecl.process `
+                -Visibility $projectDecl.visibility -SourceControl $projectDecl.sourceControl
+            Write-Host "  [+]       project: $projectName ($creationSpec)  [created]" -ForegroundColor Yellow
+        } else {
+            # WhatIf: every governed resource lives inside the project, so there
+            # is nothing meaningful to diff until it exists — report and stop.
+            Write-Host "  [NON-COMPLIANT] create project: $projectName ($creationSpec)  (dry-run: no changes made)" -ForegroundColor Cyan
+            Write-Host "Project '$projectName' does not exist in $orgUrl. Apply would create it and then create every resource in the resolved model." -ForegroundColor Cyan
+            return
+        }
+    }
+
     Invoke-GovernanceReconcile -Resolved $resolved -OrgUrl $orgUrl -Mode $mode -TeamIds $teamIds -Prune:$pruneEnabled | Out-Null
 
     # Persist discovered/created team GUIDs back to team-ids.yaml (Apply mode only)

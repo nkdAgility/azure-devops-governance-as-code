@@ -83,6 +83,11 @@ This is not a provisioning helper that creates missing things and moves on. It i
 
 ## What "compliant" means for each resource
 
+### Project
+- The target project (`manifest.yaml` `project:` block; name defaults to the program name) exists in the org.
+- `apply` creates it when missing (process/visibility/sourceControl from the manifest); plan/`-WhatIf` reports it would be created and stops — nothing else can be diffed without it. `audit` reports it as the single finding.
+- Process, visibility, and source-control type only apply at creation — ADO cannot change them on an existing project.
+
 ### Area paths
 - Every path in `resolved.areaPaths` (non-`future`) exists in ADO.
 - Paths not in the resolved model that governance owns are flagged as orphans.
@@ -135,7 +140,7 @@ Products marked `scope: future` in `hierarchy.yaml` are **invisible to apply and
 ```
 programs/
   <name>/
-    manifest.yaml    # org + accessToken reference
+    manifest.yaml    # org + accessToken reference + project declaration
     hierarchy.yaml   # authored product/team/band tree
     access.yaml      # role definitions + group naming conventions
     members/         # <codeKey>.yaml — desired group membership

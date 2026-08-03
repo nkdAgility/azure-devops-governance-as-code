@@ -242,6 +242,12 @@ function Resolve-Governance {
     }
 
     # Attach owned area paths + derive security groups per team.
+    # Membership governance activates once ANY members file exists: from then on
+    # every active (non-future) team must have one, and an empty role list means
+    # "this group must have no members" — extras become drift, not noise.
+    $membershipGoverned = ($Members.Count -gt 0)
+    $today              = (Get-Date).Date
+
     foreach ($team in $ctx.Teams) {
         $areaConfig = [System.Collections.Generic.List[object]]::new()
         $areaConfig.Add([ordered]@{ path = $team.defaultAreaPath; includeSubAreas = $team.includeSubAreas })
@@ -252,12 +258,34 @@ function Resolve-Governance {
 
         $groupSpecs = if ($team.kind -eq 'team') { $Access.teamGroups } else { $Access.containerGroups }
         $memberKey  = $team.codePath
+        if ($membershipGoverned -and $team.scope -ne 'future' -and -not $Members.ContainsKey($memberKey)) {
+            throw "members file missing for team '$($team.name)': programs/<program>/members/$memberKey.yaml is required once membership governance is active."
+        }
         $memberSet  = if ($Members.ContainsKey($memberKey)) { $Members[$memberKey] } else { $null }
         $groups = [System.Collections.Generic.List[object]]::new()
         foreach ($spec in @($groupSpecs)) {
-            $roleMembers = @()
+            # Entries: plain UPN string (legacy) or object with upn:/group: plus
+            # reason (access grants must carry a recorded reason) and optional
+            # expires (past-dated entries leave the desired state — time-boxed
+            # guest access falls out of this).
+            $roleMembers = [System.Collections.Generic.List[object]]::new()
             if ($memberSet -and $memberSet.ContainsKey($spec.role)) {
-                $roleMembers = @($memberSet[$spec.role] | Where-Object { $_ })
+                foreach ($entry in @($memberSet[$spec.role] | Where-Object { $_ })) {
+                    if ($entry -is [string]) {
+                        $roleMembers.Add([ordered]@{ upn = $entry })
+                        continue
+                    }
+                    $norm = if ($entry.upn)   { [ordered]@{ upn = [string]$entry.upn } }
+                            elseif ($entry.group) { [ordered]@{ group = [string]$entry.group } }
+                            else { throw "members/$memberKey.yaml role '$($spec.role)': entry must be a UPN string or an object with upn: or group:." }
+                    if ($entry.reason) { $norm.reason = [string]$entry.reason }
+                    if ($entry.expires) {
+                        $exp = [datetime]$entry.expires
+                        if ($exp.Date -lt $today) { continue }   # expired -> no longer desired
+                        $norm.expires = $exp.ToString('yyyy-MM-dd')
+                    }
+                    $roleMembers.Add($norm)
+                }
             }
             $groups.Add([ordered]@{
                 role    = $spec.role
@@ -288,8 +316,34 @@ function Resolve-Governance {
         })
     }
 
+    # Structural authority: each {key}-Admins group gets node-management rights
+    # over every area path its team governs (Decision-0028 delegated ownership —
+    # structural permission only; admins need not be team members/contributors).
+    $authority = [System.Collections.Generic.List[object]]::new()
+    foreach ($team in $ctx.Teams) {
+        if ($team.scope -eq 'future') { continue }
+        $adminGroup = @($team.securityGroups | Where-Object { $_.role -eq 'admin' }) | Select-Object -First 1
+        if (-not $adminGroup) { continue }
+        $authority.Add([ordered]@{
+            group = $adminGroup.ado
+            team  = $team.name
+            paths = @($team.areaConfig | ForEach-Object { $_.path })
+        })
+    }
+
+    # Project identity: manifest project block with defaults. name defaults to
+    # the program name; process/visibility/sourceControl only apply at creation.
+    $projectSpec = $Manifest.project
+    $projectDecl = [ordered]@{
+        name          = if ($projectSpec.name)          { [string]$projectSpec.name }          else { $program }
+        process       = if ($projectSpec.process)       { [string]$projectSpec.process }       else { 'Agile' }
+        visibility    = if ($projectSpec.visibility)    { [string]$projectSpec.visibility }    else { 'private' }
+        sourceControl = if ($projectSpec.sourceControl) { [string]$projectSpec.sourceControl } else { 'git' }
+    }
+
     $resolved = [ordered]@{
         program         = $program
+        project         = $projectDecl
         org             = $Manifest.org
         generated       = (Get-Date).ToUniversalTime().ToString('o')
         sourceHash      = "sha256:$SourceHash"
@@ -297,10 +351,21 @@ function Resolve-Governance {
         teams           = $ctx.Teams
         repos           = $ctx.Repos
         pipelineFolders = $ctx.PipelineFolders
+        structuralAuthority = $authority
         stakeholders    = [ordered]@{
             accessLevel = $Access.stakeholders.accessLevel
             ado         = $Access.stakeholders.ado
             scope       = $Access.stakeholders.scope
+        }
+    }
+
+    # Governed tag taxonomy (optional — hierarchy.yaml `tags:` block).
+    # Decision-0041: everything that is not a team becomes a tag, so the
+    # sanctioned vocabulary is structural config, not free-form user data.
+    if ($Source.tags) {
+        $resolved['tags'] = [ordered]@{
+            sanctioned         = @($Source.tags.sanctioned | Where-Object { $_ })
+            disallowedPatterns = @($Source.tags.disallowedPatterns | Where-Object { $_ })
         }
     }
 
