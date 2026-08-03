@@ -29,7 +29,7 @@ function Invoke-GovernanceApply {
     $targetOrg = if ($Org) { $Org } else { $manifest.org }
     $token     = Resolve-AccessToken $manifest.accessToken
     if (-not $token) {
-        throw "Access token not found. Set the environment variable referenced by manifest.accessToken."
+        throw "Access token not found. manifest.accessToken references '$($manifest.accessToken)' - set that environment variable to a PAT for the target org and retry."
     }
     Set-AdoAuth $token
 
