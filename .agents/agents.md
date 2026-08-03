@@ -29,6 +29,26 @@ If a manifest's `accessToken` resolves to a URL, `Set-AdoAuth` will throw immedi
 
 ---
 
+## Required PAT scopes
+
+The PAT must carry these scopes (Azure DevOps → User settings → Personal access tokens; the simplest reliable option is **Full access**, since the Security scope is not individually selectable in the PAT UI):
+
+| Scope (API name) | PAT UI name | Needed for |
+|---|---|---|
+| `vso.project` / `vso.project_manage` | Project & Team — Read, write & manage | plan/audit; apply creates projects and teams |
+| `vso.work` / `vso.work_write` | Work Items — Read & write | plan/audit; apply creates area/iteration paths, team settings |
+| `vso.code` / `vso.code_manage` | Code — Read, write & manage | plan/audit; apply creates repos |
+| `vso.build` / `vso.build_execute` | Build — Read & execute | plan/audit; apply creates pipeline folders |
+| `vso.graph` / `vso.graph_manage` | Graph — Read & manage | group membership read; apply creates groups and members |
+| `vso.memberentitlementmanagement` | Member Entitlement Management — Read | apply resolves member UPNs to descriptors |
+| `vso.security_manage` | *(not in the PAT UI — requires Full access)* | apply stamps pipeline folder ACLs |
+
+**Verify, don't guess:** `./build.ps1 doctor -Program <name>` probes every scope family against the live org with side-effect-free calls (reads, plus intentionally invalid writes that ADO rejects *after* the scope check — HTTP 400 proves the scope, nothing is ever created). It exits non-zero listing the missing scopes. Run it before the first `apply` with a new PAT. The probe matrix lives in `Get-AdoScopeProbeSet` (`AzureDevOps.ps1`); if you add a resource type that calls a new API family, add a probe for it.
+
+A missing *write* scope typically surfaces as `The requested resource requires user authentication` (HTTP 401) mid-apply — run `doctor` whenever you see that.
+
+---
+
 ## Iteration cadence
 
 Iteration paths are generated from `programs/<name>/cadence.yaml` and stored in the resolved model. The hierarchy is `Year → Season → Sprint`.

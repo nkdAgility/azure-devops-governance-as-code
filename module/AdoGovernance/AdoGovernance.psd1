@@ -11,7 +11,8 @@
         'Test-Governance',
         'Invoke-GovernancePlan',
         'Invoke-GovernanceApply',
-        'Invoke-GovernanceAudit'
+        'Invoke-GovernanceAudit',
+        'Test-GovernanceAccess'
     )
     CmdletsToExport   = @()
     VariablesToExport = @()

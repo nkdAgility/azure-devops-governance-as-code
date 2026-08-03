@@ -200,6 +200,36 @@ function Set-AdoTeamName {
 
 # ─── REST helper ─────────────────────────────────────────────────────────────
 
+function Resolve-AdoRequestUri {
+    <#
+        .SYNOPSIS
+        Builds the request URI for an ADO REST call, routing resource areas that
+        do not live on the core host to their own service host:
+          _apis/graph/*            -> vssps.dev.azure.com  (identity/graph, SPS)
+          _apis/userentitlements*  -> vsaex.dev.azure.com  (member entitlements)
+        Calling these on dev.azure.com fails (404 / "controller not found") on
+        every org. Legacy {org}.visualstudio.com domains get the matching
+        {org}.vssps/vsaex.visualstudio.com host.
+    #>
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)][string]$OrgUrl,
+        [Parameter(Mandatory)][string]$Path
+    )
+    $service = switch -Regex ($Path) {
+        '^_apis/graph(/|\?|$)'            { 'vssps'; break }
+        '^_apis/userentitlements(/|\?|$)' { 'vsaex'; break }
+        default                           { $null }
+    }
+    $effective = $OrgUrl
+    if ($service) {
+        $effective = $OrgUrl `
+            -replace '^https://dev\.azure\.com/', "https://$service.dev.azure.com/" `
+            -replace '^https://([^./]+)\.visualstudio\.com', "https://`$1.$service.visualstudio.com"
+    }
+    return "$($effective.TrimEnd('/'))/$Path"
+}
+
 function Invoke-AdoRest {
     <#
         .SYNOPSIS
@@ -218,16 +248,7 @@ function Invoke-AdoRest {
         [Text.Encoding]::ASCII.GetBytes(":$($env:AZURE_DEVOPS_EXT_PAT)"))
     # Accept: application/json is required — without it ADO returns an HTML page (HTTP 203).
     $headers = @{ Authorization = "Basic $encoded"; Accept = 'application/json' }
-    # The Graph resource area lives on the SPS host (vssps.dev.azure.com /
-    # {org}.vssps.visualstudio.com), not the core host — calling it on
-    # dev.azure.com fails with 404 or "controller not found" on every org.
-    $effectiveOrgUrl = $OrgUrl
-    if ($Path -match '^_apis/graph(/|\?|$)') {
-        $effectiveOrgUrl = $OrgUrl `
-            -replace '^https://dev\.azure\.com/', 'https://vssps.dev.azure.com/' `
-            -replace '^https://([^./]+)\.visualstudio\.com', 'https://$1.vssps.visualstudio.com'
-    }
-    $uri     = "$($effectiveOrgUrl.TrimEnd('/'))/$Path"
+    $uri     = Resolve-AdoRequestUri -OrgUrl $OrgUrl -Path $Path
     $sep     = if ($uri.Contains('?')) { '&' } else { '?' }
     $uri    += "${sep}api-version=$ApiVersion"
 
@@ -247,6 +268,107 @@ function Invoke-AdoRest {
         throw "ADO REST returned non-JSON (HTML/text). Check PAT is set and has the required scope. URL: $uri"
     }
     return $response
+}
+
+# ─── PAT scope verification ──────────────────────────────────────────────────
+
+function Resolve-AdoProbeVerdict {
+    <#
+        .SYNOPSIS
+        Classifies a scope-probe response. ADO checks the PAT scope BEFORE it
+        validates the request, so an intentionally invalid write returning
+        400/404/405/409 proves the scope is present (and nothing was created),
+        while 401/403, a redirect to sign-in, or an HTML page proves it is not.
+    #>
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)][int]$StatusCode,
+        [string]$ContentType = ''
+    )
+    if ($StatusCode -in 401, 403)              { return 'missing' }
+    if ($StatusCode -ge 300 -and $StatusCode -lt 400) { return 'missing' }   # redirect to sign-in
+    if ($StatusCode -eq 203)                   { return 'missing' }          # HTML sign-in page
+    if ($StatusCode -in 200, 201, 204 -and $ContentType -like '*html*') { return 'missing' }
+    if ($StatusCode -in 200, 201, 204)         { return 'ok' }
+    if ($StatusCode -in 400, 404, 405, 409)    { return 'ok' }               # authorized; request invalid by design
+    return 'unknown'
+}
+
+function Get-AdoScopeProbeSet {
+    <#
+        .SYNOPSIS
+        The side-effect-free probe matrix for every PAT scope family the engine
+        uses. Read probes are plain GETs; write probes send intentionally
+        invalid payloads (empty body / bogus descriptors) so a scoped PAT gets
+        400 Bad Request and nothing is ever created or changed.
+    #>
+    [CmdletBinding()]
+    param([Parameter(Mandatory)][string]$Project)
+    $p = [Uri]::EscapeDataString($Project)
+    @(
+        @{ Family = 'Project & Team (read)';        Scope = 'vso.project';        NeededFor = 'plan, audit'; Method = 'GET';  Path = '_apis/projects' }
+        @{ Family = 'Project & Team (manage)';      Scope = 'vso.project_manage'; NeededFor = 'apply (project/team create)'; Method = 'POST'; Path = '_apis/projects'; Body = @{} }
+        @{ Family = 'Work items (read)';            Scope = 'vso.work';           NeededFor = 'plan, audit'; Method = 'GET';  Path = "$p/_apis/wit/classificationnodes/areas" }
+        @{ Family = 'Work items (write)';           Scope = 'vso.work_write';     NeededFor = 'apply (area/iteration paths, team settings)'; Method = 'POST'; Path = "$p/_apis/wit/classificationnodes/areas"; Body = @{} }
+        @{ Family = 'Code (read)';                  Scope = 'vso.code';           NeededFor = 'plan, audit'; Method = 'GET';  Path = "$p/_apis/git/repositories" }
+        @{ Family = 'Code (read, write & manage)';  Scope = 'vso.code_manage';    NeededFor = 'apply (repo create)'; Method = 'POST'; Path = "$p/_apis/git/repositories"; Body = @{} }
+        @{ Family = 'Build (read)';                 Scope = 'vso.build';          NeededFor = 'plan, audit'; Method = 'GET';  Path = "$p/_apis/build/folders" }
+        @{ Family = 'Build (read & execute)';       Scope = 'vso.build_execute';  NeededFor = 'apply (pipeline folder create)'; Method = 'PUT'; Path = "$p/_apis/build/folders?path="; Body = @{} }
+        @{ Family = 'Graph (read)';                 Scope = 'vso.graph';          NeededFor = 'plan, audit (group membership)'; Method = 'GET'; Path = '_apis/graph/groups' }
+        @{ Family = 'Graph (manage)';               Scope = 'vso.graph_manage';   NeededFor = 'apply (group create, membership)'; Method = 'PUT'; Path = '_apis/graph/memberships/invalid-descriptor/invalid-descriptor' }
+        @{ Family = 'Member entitlements (read)';   Scope = 'vso.memberentitlementmanagement'; NeededFor = 'apply (member UPN lookup)'; Method = 'GET'; Path = '_apis/userentitlements?top=1' }
+        @{ Family = 'Security (ACL read/manage)';   Scope = 'vso.security_manage / Full access'; NeededFor = 'apply (pipeline folder ACLs)'; Method = 'GET'; Path = "_apis/accesscontrollists/$script:PipelineBuildNamespaceId" }
+    )
+}
+
+function Test-AdoAuthScope {
+    <#
+        .SYNOPSIS
+        Runs the scope probe matrix against a live org and returns one result
+        object per probe: Family, Scope, NeededFor, Verdict (ok/missing/unknown),
+        StatusCode. Makes no changes to the org — see Get-AdoScopeProbeSet.
+        Requires $env:AZURE_DEVOPS_EXT_PAT (via Set-AdoAuth).
+    #>
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)][string]$OrgUrl,
+        [Parameter(Mandatory)][string]$Project
+    )
+    $encoded = [Convert]::ToBase64String(
+        [Text.Encoding]::ASCII.GetBytes(":$($env:AZURE_DEVOPS_EXT_PAT)"))
+    $headers = @{ Authorization = "Basic $encoded"; Accept = 'application/json' }
+
+    foreach ($probe in Get-AdoScopeProbeSet -Project $Project) {
+        $uri  = Resolve-AdoRequestUri -OrgUrl $OrgUrl -Path $probe.Path
+        $sep  = if ($uri.Contains('?')) { '&' } else { '?' }
+        $uri += "${sep}api-version=7.1-preview.1"
+
+        $params = @{ Uri = $uri; Method = $probe.Method; Headers = $headers;
+                     SkipHttpErrorCheck = $true; MaximumRedirection = 0;
+                     ErrorAction = 'SilentlyContinue'; SkipCertificateCheck = $false }
+        if ($probe.ContainsKey('Body')) {
+            $params['Body']        = ($probe.Body | ConvertTo-Json -Compress)
+            $params['ContentType'] = 'application/json'
+        }
+        try {
+            $resp        = Invoke-WebRequest @params
+            $statusCode  = [int]$resp.StatusCode
+            $contentType = [string]$resp.Headers['Content-Type']
+        } catch {
+            # Network-level failure (DNS, TLS, timeout) — not a scope verdict.
+            $statusCode  = 0
+            $contentType = ''
+        }
+        [pscustomobject]@{
+            Family     = $probe.Family
+            Scope      = $probe.Scope
+            NeededFor  = $probe.NeededFor
+            StatusCode = $statusCode
+            Verdict    = if ($statusCode -eq 0) { 'unknown' } else {
+                Resolve-AdoProbeVerdict -StatusCode $statusCode -ContentType $contentType
+            }
+        }
+    }
 }
 
 # ─── Project identity ─────────────────────────────────────────────────────────

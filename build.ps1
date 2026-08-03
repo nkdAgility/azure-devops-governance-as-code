@@ -30,7 +30,7 @@
 [CmdletBinding()]
 param(
     [Parameter(Position = 0)]
-    [ValidateSet('build', 'validate', 'plan', 'apply', 'audit')]
+    [ValidateSet('build', 'validate', 'plan', 'apply', 'audit', 'doctor')]
     [string]$Command,
 
     [string]$Program,
@@ -64,6 +64,7 @@ Commands:
   plan      Diff resolved desired state vs live Azure DevOps
   apply     Reconcile Azure DevOps to the resolved desired state
   audit     Read-only compliance report
+  doctor    Verify the PAT has every required scope (no changes made)
 
 Options:
   -Program      Target one program under the programs root (default: all)
@@ -102,15 +103,42 @@ foreach ($dep in 'powershell-yaml') {
 Import-Module $moduleManifest -Force
 
 # 3. resolve target program(s)
+
+# This repo is the engine and ships no client programs. When a program is not
+# found locally, look for it in sibling client repos (<repo>/governance/programs/)
+# so the error can say exactly where to run from instead of a bare "not found".
+function Find-ClientProgramPath {
+    param([string]$Name)
+    $parent = Split-Path $PSScriptRoot -Parent
+    foreach ($dir in @(Get-ChildItem $parent -Directory -ErrorAction SilentlyContinue)) {
+        $candidate = Join-Path $dir.FullName "governance/programs/$Name"
+        if (Test-Path $candidate) { return $candidate }
+    }
+    return $null
+}
+
+$engineHint = 'This repo is the governance ENGINE and carries no client programs - ' +
+              'client configuration lives in its own repo (NKDAClient-<client>/governance/). ' +
+              'Run that repo''s governance/build.ps1, or pass -ProgramsRoot <path-to-programs>.'
+
 $programPaths = if ($Program) {
     $path = Join-Path $programsRoot $Program
-    if (-not (Test-Path $path)) { throw "Program not found: $path" }
+    if (-not (Test-Path $path)) {
+        $elsewhere = Find-ClientProgramPath -Name $Program
+        if ($elsewhere) {
+            $clientBuild = Join-Path (Split-Path (Split-Path $elsewhere -Parent) -Parent) 'build.ps1'
+            throw "Program '$Program' is not in this repo - it lives at: $elsewhere`n" +
+                  "Run it from the client repo instead:`n" +
+                  "  pwsh $clientBuild $Command -Program $Program"
+        }
+        throw "Program not found: $path`n$engineHint"
+    }
     @($path)
 }
 else {
     @(Get-ChildItem -Path $programsRoot -Directory | Select-Object -ExpandProperty FullName)
 }
-if ($programPaths.Count -eq 0) { throw "No programs found under $programsRoot" }
+if ($programPaths.Count -eq 0) { throw "No programs found under $programsRoot`n$engineHint" }
 
 # 4. dispatch per program. resolved.yaml is a build artifact under out/ (gitignored).
 foreach ($programPath in $programPaths) {
@@ -123,5 +151,6 @@ foreach ($programPath in $programPaths) {
         'plan'     { Invoke-GovernancePlan   -ProgramPath $programPath -ResolvedPath $resolvedPath -Org $Org }
         'apply'    { Invoke-GovernanceApply  -ProgramPath $programPath -ResolvedPath $resolvedPath -Org $Org -WhatIf:$WhatIf -Prune:$Prune }
         'audit'    { Invoke-GovernanceAudit  -ProgramPath $programPath -ResolvedPath $resolvedPath -Org $Org }
+        'doctor'   { Test-GovernanceAccess   -ProgramPath $programPath -Org $Org }
     }
 }

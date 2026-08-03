@@ -263,3 +263,95 @@ Describe 'Pipeline folder ACL resolution' {
         ($fnd.acl | Where-Object group -eq 'PTL-FND-Readers').permission | Should -Be 'read'
     }
 }
+
+Describe 'ADO REST host routing' {
+
+    It 'routes graph paths to the SPS host on dev.azure.com orgs' {
+        InModuleScope AdoGovernance {
+            Resolve-AdoRequestUri -OrgUrl 'https://dev.azure.com/acme' -Path '_apis/graph/groups' |
+                Should -Be 'https://vssps.dev.azure.com/acme/_apis/graph/groups'
+        }
+    }
+
+    It 'routes graph paths to the SPS host on legacy visualstudio.com orgs' {
+        InModuleScope AdoGovernance {
+            Resolve-AdoRequestUri -OrgUrl 'https://acme.visualstudio.com' -Path '_apis/graph/memberships/x/y' |
+                Should -Be 'https://acme.vssps.visualstudio.com/_apis/graph/memberships/x/y'
+        }
+    }
+
+    It 'routes user entitlement paths to the vsaex host' {
+        InModuleScope AdoGovernance {
+            Resolve-AdoRequestUri -OrgUrl 'https://dev.azure.com/acme' -Path '_apis/userentitlements?top=1' |
+                Should -Be 'https://vsaex.dev.azure.com/acme/_apis/userentitlements?top=1'
+        }
+    }
+
+    It 'leaves core-host paths untouched' {
+        InModuleScope AdoGovernance {
+            Resolve-AdoRequestUri -OrgUrl 'https://dev.azure.com/acme' -Path 'Proj/_apis/git/repositories' |
+                Should -Be 'https://dev.azure.com/acme/Proj/_apis/git/repositories'
+        }
+    }
+
+    It 'does not reroute project-scoped paths that merely contain graph' {
+        InModuleScope AdoGovernance {
+            Resolve-AdoRequestUri -OrgUrl 'https://dev.azure.com/acme' -Path 'Proj/_apis/graphite' |
+                Should -Be 'https://dev.azure.com/acme/Proj/_apis/graphite'
+        }
+    }
+}
+
+Describe 'PAT scope probe verdicts' {
+
+    It 'treats success statuses as ok' {
+        InModuleScope AdoGovernance {
+            Resolve-AdoProbeVerdict -StatusCode 200 -ContentType 'application/json' | Should -Be 'ok'
+            Resolve-AdoProbeVerdict -StatusCode 204 | Should -Be 'ok'
+        }
+    }
+
+    It 'treats request-validation failures as ok (scope check happens first)' {
+        InModuleScope AdoGovernance {
+            Resolve-AdoProbeVerdict -StatusCode 400 | Should -Be 'ok'
+            Resolve-AdoProbeVerdict -StatusCode 404 | Should -Be 'ok'
+            Resolve-AdoProbeVerdict -StatusCode 405 | Should -Be 'ok'
+        }
+    }
+
+    It 'treats auth failures as missing' {
+        InModuleScope AdoGovernance {
+            Resolve-AdoProbeVerdict -StatusCode 401 | Should -Be 'missing'
+            Resolve-AdoProbeVerdict -StatusCode 403 | Should -Be 'missing'
+            Resolve-AdoProbeVerdict -StatusCode 203 | Should -Be 'missing'
+            Resolve-AdoProbeVerdict -StatusCode 302 | Should -Be 'missing'
+        }
+    }
+
+    It 'treats an HTML body on success status as missing (sign-in page)' {
+        InModuleScope AdoGovernance {
+            Resolve-AdoProbeVerdict -StatusCode 200 -ContentType 'text/html; charset=utf-8' | Should -Be 'missing'
+        }
+    }
+
+    It 'treats server errors as unknown' {
+        InModuleScope AdoGovernance {
+            Resolve-AdoProbeVerdict -StatusCode 500 | Should -Be 'unknown'
+        }
+    }
+
+    It 'covers every scope family the engine calls' {
+        InModuleScope AdoGovernance {
+            $probes = Get-AdoScopeProbeSet -Project 'Demo'
+            $probes.Scope | Should -Contain 'vso.project_manage'
+            $probes.Scope | Should -Contain 'vso.work_write'
+            $probes.Scope | Should -Contain 'vso.code_manage'
+            $probes.Scope | Should -Contain 'vso.build_execute'
+            $probes.Scope | Should -Contain 'vso.graph_manage'
+            # every write probe must be intentionally invalid: empty body or bogus path
+            foreach ($p in $probes | Where-Object Method -ne 'GET') {
+                if ($p.ContainsKey('Body')) { $p.Body.Count | Should -Be 0 }
+            }
+        }
+    }
+}
