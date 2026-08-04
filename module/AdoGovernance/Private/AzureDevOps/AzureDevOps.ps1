@@ -404,7 +404,8 @@ function Test-AdoAuthScope {
         }
 
         # Probe the same Entra fallback apply uses before declaring the
-        # capability missing — the PAT alone is not the whole story.
+        # capability missing — the PAT alone is not the whole story. Every
+        # outcome sets a note: covered, no session, or session rejected.
         $note = $null
         if ($verdict -eq 'missing' -and $probe.EntraFallback) {
             $entra = Get-AdoEntraToken -Optional
@@ -416,8 +417,12 @@ function Test-AdoAuthScope {
                     if ((Resolve-AdoProbeVerdict -StatusCode $entraStatus -ContentType ([string]$resp.Headers['Content-Type'])) -eq 'ok') {
                         $verdict = 'ok'
                         $note    = 'PAT lacks it; covered by the Entra fallback (az login)'
+                    } else {
+                        $note = "PAT lacks it, and the org also rejected the az login token (HTTP $entraStatus) - is az signed into the right tenant with access to this org? Try: az login --tenant <org tenant>"
                     }
-                } catch { }
+                } catch {
+                    $note = "PAT lacks it, and the Entra fallback probe failed to reach the org: $_"
+                }
             } else {
                 $note = "PAT lacks it and no az login session found - run 'az login' to enable the Entra fallback"
             }

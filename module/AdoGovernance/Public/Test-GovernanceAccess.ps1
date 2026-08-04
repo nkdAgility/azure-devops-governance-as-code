@@ -48,9 +48,9 @@ function Test-GovernanceAccess {
     $missing = @($results | Where-Object Verdict -eq 'missing')
     if ($missing.Count -gt 0) {
         Write-Host ""
-        Write-Host ("PAT is missing {0} scope(s): {1}" -f $missing.Count,
+        Write-Host ("Missing {0} capability(ies): {1}" -f $missing.Count,
             (($missing | ForEach-Object { $_.Scope }) -join ', ')) -ForegroundColor Red
-        Write-Host "Add these scopes to the PAT (or use Full access) and re-run doctor." -ForegroundColor Red
+        Write-Host "Fix: add the scope to the PAT where selectable; for security writes (not PAT-selectable) sign in with 'az login' using an account with access to this org - see the note on the [MISSING] row." -ForegroundColor Red
         return $false
     }
     Write-Host "All scope probes passed." -ForegroundColor Green
