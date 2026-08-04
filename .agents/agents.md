@@ -29,9 +29,21 @@ If a manifest's `accessToken` resolves to a URL, `Set-AdoAuth` will throw immedi
 
 ---
 
-## Required PAT scopes
+## Authentication (Entra-first)
 
-The PAT must carry these scopes (Azure DevOps → User settings → Personal access tokens; the simplest reliable option is **Full access**, since the Security scope is not individually selectable in the PAT UI):
+**Entra is the default auth mode.** Runs authenticate as the signed-in az identity — interactively via `az login`, in CI via `azure/login` OIDC or a service-principal login. Entra tokens carry the identity's real permissions: no PAT scopes to configure, no secret to store, and they work in orgs that forbid full-access PATs. The engine acquires tokens itself (`az account get-access-token`, cached per run) and the `az devops` CLI picks up the same session automatically.
+
+Mode resolution (`Resolve-AdoAuthMode` / `Initialize-AdoAuth`):
+1. manifest `auth: pat` → use the `accessToken` PAT (explicit opt-out of Entra).
+2. otherwise, az session present → **entra**.
+3. otherwise, `accessToken` resolves → **pat** with a warning (CI fallback).
+4. otherwise → error telling the operator to `az login`.
+
+`doctor` prints which identity it is testing (`[auth: Entra (user@…)]` or `[auth: PAT]`) — in entra mode a `[MISSING]` row means the *identity* lacks the permission in the org, not a token scope problem.
+
+## Required PAT scopes (auth: pat / CI fallback only)
+
+When a PAT is used, it must carry these scopes (Azure DevOps → User settings → Personal access tokens):
 
 | Scope (API name) | PAT UI name | Needed for |
 |---|---|---|

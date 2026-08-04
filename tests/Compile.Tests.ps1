@@ -302,6 +302,49 @@ Describe 'ADO REST host routing' {
     }
 }
 
+Describe 'Auth mode resolution (Entra-first)' {
+
+    It 'defaults to entra when an az session exists' {
+        InModuleScope AdoGovernance {
+            Resolve-AdoAuthMode -DeclaredMode $null -HasEntraSession $true -HasPatToken $true | Should -Be 'entra'
+            Resolve-AdoAuthMode -DeclaredMode ''    -HasEntraSession $true -HasPatToken $false | Should -Be 'entra'
+        }
+    }
+
+    It 'falls back to a configured PAT when no az session exists' {
+        InModuleScope AdoGovernance {
+            Resolve-AdoAuthMode -DeclaredMode $null -HasEntraSession $false -HasPatToken $true | Should -Be 'pat-fallback'
+        }
+    }
+
+    It 'honours an explicit auth: pat declaration' {
+        InModuleScope AdoGovernance {
+            Resolve-AdoAuthMode -DeclaredMode 'pat' -HasEntraSession $true -HasPatToken $true | Should -Be 'pat'
+        }
+    }
+
+    It 'throws when auth: pat is declared without a resolvable token' {
+        InModuleScope AdoGovernance {
+            { Resolve-AdoAuthMode -DeclaredMode 'pat' -HasEntraSession $true -HasPatToken $false } |
+                Should -Throw '*accessToken did not resolve*'
+        }
+    }
+
+    It 'throws when no credential of any kind is available' {
+        InModuleScope AdoGovernance {
+            { Resolve-AdoAuthMode -DeclaredMode $null -HasEntraSession $false -HasPatToken $false } |
+                Should -Throw '*az login*'
+        }
+    }
+
+    It 'rejects unknown auth modes' {
+        InModuleScope AdoGovernance {
+            { Resolve-AdoAuthMode -DeclaredMode 'oauth' -HasEntraSession $true -HasPatToken $true } |
+                Should -Throw "*must be 'entra' or 'pat'*"
+        }
+    }
+}
+
 Describe 'PAT scope probe verdicts' {
 
     It 'treats success statuses as ok' {

@@ -20,16 +20,16 @@ function Test-GovernanceAccess {
     $source    = Import-GovernanceSource -ProgramPath $ProgramPath
     $manifest  = $source.Manifest
     $targetOrg = if ($Org) { $Org } else { $manifest.org }
-    $token     = Resolve-AccessToken $manifest.accessToken
-    if (-not $token) {
-        throw "Access token not found. manifest.accessToken references '$($manifest.accessToken)' - set that environment variable to a PAT for the target org and retry."
-    }
-    Set-AdoAuth $token
+    $authMode = Initialize-AdoAuth -Manifest $manifest
 
     $orgUrl      = ConvertTo-AdoOrgUrl -Org $targetOrg
     $projectName = if ($manifest.project -and $manifest.project.name) { $manifest.project.name } else { $manifest.program }
 
-    Write-Host "Checking PAT scopes for '$projectName' in $orgUrl" -ForegroundColor Cyan
+    $identity = if ($authMode -eq 'entra') {
+        $who = az account show --query user.name --output tsv 2>$null
+        "Entra ($who)"
+    } else { 'PAT' }
+    Write-Host "Checking access for '$projectName' in $orgUrl  [auth: $identity]" -ForegroundColor Cyan
     Write-Host "(read probes + intentionally invalid writes - no changes are made)" -ForegroundColor DarkGray
 
     $results = @(Test-AdoAuthScope -OrgUrl $orgUrl -Project $projectName)

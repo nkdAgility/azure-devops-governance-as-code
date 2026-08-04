@@ -258,12 +258,76 @@ function Get-AdoEntraToken {
     return $script:AdoEntraToken
 }
 
+function Resolve-AdoAuthMode {
+    <#
+        .SYNOPSIS
+        Pure decision of which auth mode a run uses. Entra (az login / azure-
+        login OIDC / service principal) is the default: no PAT scopes to
+        misconfigure and no secret to store. 'pat' must be declared explicitly.
+        Returns 'entra', 'pat', or 'pat-fallback' (entra wanted, no az session,
+        but a PAT is configured — caller should warn and use the PAT).
+    #>
+    [CmdletBinding()]
+    param(
+        [AllowNull()][AllowEmptyString()][string]$DeclaredMode,
+        [bool]$HasEntraSession,
+        [bool]$HasPatToken
+    )
+    $declared = if ([string]::IsNullOrWhiteSpace($DeclaredMode)) { 'entra' } else { $DeclaredMode.Trim().ToLowerInvariant() }
+    if ($declared -notin 'entra', 'pat') {
+        throw "manifest auth must be 'entra' or 'pat', got '$DeclaredMode'."
+    }
+    if ($declared -eq 'pat') {
+        if (-not $HasPatToken) {
+            throw "manifest declares auth: pat but accessToken did not resolve - set the referenced environment variable, or remove 'auth: pat' to use the Entra default (az login)."
+        }
+        return 'pat'
+    }
+    if ($HasEntraSession) { return 'entra' }
+    if ($HasPatToken)     { return 'pat-fallback' }
+    throw "No credentials available. Run 'az login' (Entra is the default auth), or configure manifest accessToken with a PAT env var reference for non-interactive use."
+}
+
+function Initialize-AdoAuth {
+    <#
+        .SYNOPSIS
+        Establishes authentication for a run from the manifest. Entra-first:
+        uses the az session (interactive az login, azure/login OIDC, or a
+        service principal login) unless the manifest declares auth: pat, or no
+        az session exists and a PAT is configured (CI fallback, with warning).
+        Sets the module-wide auth mode consumed by Invoke-AdoRest and the CLI.
+    #>
+    [CmdletBinding()]
+    param([Parameter(Mandatory)]$Manifest)
+
+    $token = Resolve-AccessToken $Manifest.accessToken
+    $entra = Get-AdoEntraToken -Optional
+    $mode  = Resolve-AdoAuthMode -DeclaredMode ([string]$Manifest.auth) `
+        -HasEntraSession ([bool]$entra) -HasPatToken (-not [string]::IsNullOrWhiteSpace($token))
+
+    if ($mode -eq 'pat-fallback') {
+        Write-Host "No az login session found - falling back to the configured PAT. Interactive runs should 'az login' (Entra is the default auth)." -ForegroundColor Yellow
+        $mode = 'pat'
+    }
+    if ($mode -eq 'pat') {
+        Set-AdoAuth $token
+    } else {
+        # The az devops CLI uses the az login session only when
+        # AZURE_DEVOPS_EXT_PAT is unset — clear it so a stray PAT cannot
+        # shadow the Entra identity for CLI-backed calls.
+        Remove-Item Env:AZURE_DEVOPS_EXT_PAT -ErrorAction SilentlyContinue
+    }
+    $script:AdoAuthMode = $mode
+    return $mode
+}
+
 function Invoke-AdoRest {
     <#
         .SYNOPSIS
         Generic REST helper for Azure DevOps API calls.
-        Auth 'pat' (default) requires $env:AZURE_DEVOPS_EXT_PAT (Set-AdoAuth);
-        Auth 'entra' sends a Bearer token from the az login session instead.
+        Auth defaults to the run's mode (Initialize-AdoAuth): 'pat' sends the
+        AZURE_DEVOPS_EXT_PAT as Basic auth, 'entra' a Bearer token from the az
+        session. Pass -Auth to override for a single call.
     #>
     [CmdletBinding()]
     param(
@@ -272,8 +336,9 @@ function Invoke-AdoRest {
         [string]$Method     = 'GET',
         [object]$Body       = $null,
         [string]$ApiVersion = '7.1',
-        [ValidateSet('pat', 'entra')][string]$Auth = 'pat'
+        [ValidateSet('', 'pat', 'entra')][string]$Auth = ''
     )
+    if (-not $Auth) { $Auth = if ($script:AdoAuthMode) { $script:AdoAuthMode } else { 'pat' } }
     # Accept: application/json is required — without it ADO returns an HTML page (HTTP 203).
     $headers = if ($Auth -eq 'entra') {
         @{ Authorization = "Bearer $(Get-AdoEntraToken)"; Accept = 'application/json' }
@@ -374,9 +439,14 @@ function Test-AdoAuthScope {
         [Parameter(Mandatory)][string]$OrgUrl,
         [Parameter(Mandatory)][string]$Project
     )
-    $encoded = [Convert]::ToBase64String(
-        [Text.Encoding]::ASCII.GetBytes(":$($env:AZURE_DEVOPS_EXT_PAT)"))
-    $headers = @{ Authorization = "Basic $encoded"; Accept = 'application/json' }
+    $mode    = if ($script:AdoAuthMode) { $script:AdoAuthMode } else { 'pat' }
+    $headers = if ($mode -eq 'entra') {
+        @{ Authorization = "Bearer $(Get-AdoEntraToken)"; Accept = 'application/json' }
+    } else {
+        $encoded = [Convert]::ToBase64String(
+            [Text.Encoding]::ASCII.GetBytes(":$($env:AZURE_DEVOPS_EXT_PAT)"))
+        @{ Authorization = "Basic $encoded"; Accept = 'application/json' }
+    }
 
     foreach ($probe in Get-AdoScopeProbeSet -Project $Project) {
         $uri  = Resolve-AdoRequestUri -OrgUrl $OrgUrl -Path $probe.Path
@@ -406,8 +476,13 @@ function Test-AdoAuthScope {
         # Probe the same Entra fallback apply uses before declaring the
         # capability missing — the PAT alone is not the whole story. Every
         # outcome sets a note: covered, no session, or session rejected.
+        # In entra mode there is no separate fallback: missing means the
+        # signed-in identity genuinely lacks the permission.
         $note = $null
-        if ($verdict -eq 'missing' -and $probe.EntraFallback) {
+        if ($verdict -eq 'missing' -and $mode -eq 'entra') {
+            $note = 'the signed-in Entra identity lacks this permission in the org - grant it (project/collection admin) and re-run'
+        }
+        if ($verdict -eq 'missing' -and $mode -ne 'entra' -and $probe.EntraFallback) {
             $entra = Get-AdoEntraToken -Optional
             if ($entra) {
                 $params['Headers'] = @{ Authorization = "Bearer $entra"; Accept = 'application/json' }
@@ -840,7 +915,9 @@ function Set-AdoAccessControlEntry {
         Invoke-AdoRest -OrgUrl $OrgUrl -Path "_apis/accesscontrolentries/$NamespaceId" `
             -Method 'POST' -Body $Body | Out-Null
     } catch {
-        if ("$_" -notmatch '401|Unauthorized') { throw }
+        # In entra mode a 401 is a real permission problem — retrying with the
+        # same identity is pointless. Only PAT runs escalate to the fallback.
+        if ($script:AdoAuthMode -eq 'entra' -or "$_" -notmatch '401|Unauthorized') { throw }
         Invoke-AdoRest -OrgUrl $OrgUrl -Path "_apis/accesscontrolentries/$NamespaceId" `
             -Method 'POST' -Body $Body -Auth entra | Out-Null
     }

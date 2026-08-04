@@ -27,11 +27,7 @@ function Invoke-GovernanceApply {
     $manifest  = $source.Manifest
     $teamIds   = $source.TeamIds      # codePath -> GUID; mutated by reconcile, written back below
     $targetOrg = if ($Org) { $Org } else { $manifest.org }
-    $token     = Resolve-AccessToken $manifest.accessToken
-    if (-not $token) {
-        throw "Access token not found. manifest.accessToken references '$($manifest.accessToken)' - set that environment variable to a PAT for the target org and retry."
-    }
-    Set-AdoAuth $token
+    Initialize-AdoAuth -Manifest $manifest | Out-Null
 
     $orgUrl   = ConvertTo-AdoOrgUrl -Org $targetOrg
     $resolved = ConvertFrom-Yaml (Get-Content $ResolvedPath -Raw)
