@@ -103,6 +103,22 @@ Describe 'Compile stage' {
         ($script:resolved.pipelineFolders.path) | Should -Not -Contain '\Portal\Platform\Foundation\Open API'
     }
 
+    It 'omits the pipeline folder for a team with builds: false' {
+        ($script:resolved.pipelineFolders.path) | Should -Not -Contain '\Portal\Platform\Geometry Library'
+        # but the team itself still exists with its area config
+        ($script:resolved.teams | Where-Object short -eq 'GLI') | Should -Not -BeNullOrEmpty
+    }
+
+    It 'omits the pipeline folder for a product with builds: false' {
+        ($script:resolved.pipelineFolders.path) | Should -Not -Contain '\Vista'
+        ($script:resolved.teams | Where-Object name -eq 'Vista (portfolio)') | Should -Not -BeNullOrEmpty
+    }
+
+    It 'still creates pipeline folders for nodes without a builds flag (default true)' {
+        ($script:resolved.pipelineFolders.path) | Should -Contain '\Portal\Platform\Stream Modeling'
+        ($script:resolved.pipelineFolders.path) | Should -Contain '\Studio'
+    }
+
     It 'exposes a members collection on each group (reconciliation target)' {
         $root = $script:resolved.teams | Where-Object name -eq 'Odyssey'
         ($root.securityGroups | Where-Object role -eq 'reader').Keys | Should -Contain 'members'

@@ -13,6 +13,8 @@
 #   - `type: portfolio|structural|delivery` overrides the positional team type
 #     (default: node with child teams -> structural, leaf -> delivery)
 #   - `iterations: sprints|seasons|none` overrides the type's iteration scope
+#   - `builds: false` = the node has no builds of its own, so no pipeline
+#     folder (or folder ACL) is created for it (default: true)
 
 products:
 
@@ -33,6 +35,7 @@ products:
         iterations: none    # delivery team that does not plan in sprints
       - name: Geometry Library
         short: GLI
+        builds: false     # no builds of its own -> no pipeline folder
       - name: Resource Modeling
         short: RVM
       - name: Stream Modeling
@@ -69,6 +72,7 @@ products:
   - name: Vista
     dpm: ~            # DPM pending confirmation
     short: VIS
+    builds: false     # product without builds -> no pipeline folder
 
   # ── Colors: its own product node, but delivered by the Graphics Pipeline team ──
   - name: Colors

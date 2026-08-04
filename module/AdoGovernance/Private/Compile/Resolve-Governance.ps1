@@ -109,7 +109,10 @@ function Add-TeamNode {
             throw "hierarchy.yaml: node '$($Node.name)' has unknown iterations value '$iterScope' (expected: $($script:IterationScopeNames -join ', '))."
         }
 
-        $folder = if ($IsFirstLevel) { $path.Substring($ProgramRoot.Length) } else { $null }
+        # A team only gets a pipeline folder when it has its own builds.
+        # `builds: false` in hierarchy.yaml opts out; default is true.
+        $hasBuilds = ($null -eq $Node.builds) -or [bool]$Node.builds
+        $folder = if ($IsFirstLevel -and $hasBuilds) { $path.Substring($ProgramRoot.Length) } else { $null }
         $Ctx.Teams.Add([ordered]@{
             name            = $qualifiedName
             short           = $Node.short
@@ -189,6 +192,9 @@ function Resolve-Governance {
             Add-OwnedEntry -Ctx $ctx -Key $product.owner -Path $productPath -IncludeSubAreas $true
         }
         else {
+            # Products opt out of a pipeline folder the same way teams do:
+            # `builds: false` when the product has no builds of its own.
+            $productHasBuilds = ($null -eq $product.builds) -or [bool]$product.builds
             $teamObj = [ordered]@{
                 name            = "$($product.name) (portfolio)"
                 short           = $product.short
@@ -200,7 +206,7 @@ function Resolve-Governance {
                 includeSubAreas = $portfolioDef.includeSubAreas
                 iterationScope  = $portfolioDef.iterationScope
                 backlogs        = @($portfolioDef.backlogs)
-                pipelineFolder  = $productPath.Substring($root.Length)
+                pipelineFolder  = if ($productHasBuilds) { $productPath.Substring($root.Length) } else { $null }
             }
             if ($product.scope) { $teamObj.scope = $product.scope }
             $ctx.Teams.Add($teamObj)
