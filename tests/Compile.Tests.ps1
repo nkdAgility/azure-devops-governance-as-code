@@ -340,6 +340,46 @@ Describe 'PAT scope probe verdicts' {
         }
     }
 
+    It 'diagnoses ACL 401s as the non-selectable security scope' {
+        InModuleScope AdoGovernance {
+            Resolve-GovernanceErrorReason -Finding "ERROR setting ACL on '\X' for identity 'Y': Response status code does not indicate success: 401 (Unauthorized)." |
+                Should -Match 'security ACLs'
+            Resolve-GovernanceErrorReason -Finding "ERROR granting structural authority to 'X' on '\Y': 401 (Unauthorized)." |
+                Should -Match 'security ACLs'
+        }
+    }
+
+    It 'diagnoses generic 401s as a missing PAT scope' {
+        InModuleScope AdoGovernance {
+            Resolve-GovernanceErrorReason -Finding "ERROR creating repo 'x': The requested resource requires user authentication" |
+                Should -Match "doctor"
+        }
+    }
+
+    It 'diagnoses unresolvable members, with and without a near-match' {
+        InModuleScope AdoGovernance {
+            Resolve-GovernanceErrorReason -Finding "UNRESOLVABLE member 'a.b@c.com' in 'G': no org member has this exact UPN - did you mean: AB@c.com (A B)?" |
+                Should -Match 'fix the UPN'
+            Resolve-GovernanceErrorReason -Finding "UNRESOLVABLE member 'a.b@c.com' in 'G': no org member matches this UPN" |
+                Should -Match 'added to the Azure DevOps org'
+        }
+    }
+
+    It 'diagnoses backlog level name mismatches as a cadence.yaml problem' {
+        InModuleScope AdoGovernance {
+            Resolve-GovernanceErrorReason -Finding "DRIFT team 'T': configured backlog level 'God Mode' does not exist in the process (levels: A, B)" |
+                Should -Match 'cadence.yaml'
+            Resolve-GovernanceErrorReason -Finding "ERROR setting backlog levels for 'T': VS402489: You cannot hide all backlog levels." |
+                Should -Match 'cadence.yaml'
+        }
+    }
+
+    It 'returns null for undiagnosed signatures' {
+        InModuleScope AdoGovernance {
+            Resolve-GovernanceErrorReason -Finding 'ERROR something entirely novel' | Should -BeNullOrEmpty
+        }
+    }
+
     It 'covers every scope family the engine calls' {
         InModuleScope AdoGovernance {
             $probes = Get-AdoScopeProbeSet -Project 'Demo'
@@ -348,9 +388,15 @@ Describe 'PAT scope probe verdicts' {
             $probes.Scope | Should -Contain 'vso.code_manage'
             $probes.Scope | Should -Contain 'vso.build_execute'
             $probes.Scope | Should -Contain 'vso.graph_manage'
-            # every write probe must be intentionally invalid: empty body or bogus path
+            # every write probe must be a no-op: empty body (rejected after the
+            # scope check) or an empty accessControlEntries list (accepted but
+            # writes nothing)
             foreach ($p in $probes | Where-Object Method -ne 'GET') {
-                if ($p.ContainsKey('Body')) { $p.Body.Count | Should -Be 0 }
+                if ($p.ContainsKey('Body')) {
+                    $noOp = ($p.Body.Count -eq 0) -or
+                            ($p.Body.ContainsKey('accessControlEntries') -and @($p.Body.accessControlEntries).Count -eq 0)
+                    $noOp | Should -BeTrue -Because "probe '$($p.Family)' must not mutate anything"
+                }
             }
         }
     }

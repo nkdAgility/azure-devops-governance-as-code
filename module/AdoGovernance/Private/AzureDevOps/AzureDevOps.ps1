@@ -317,7 +317,10 @@ function Get-AdoScopeProbeSet {
         @{ Family = 'Graph (read)';                 Scope = 'vso.graph';          NeededFor = 'plan, audit (group membership)'; Method = 'GET'; Path = '_apis/graph/groups' }
         @{ Family = 'Graph (manage)';               Scope = 'vso.graph_manage';   NeededFor = 'apply (group create, membership)'; Method = 'PUT'; Path = '_apis/graph/memberships/invalid-descriptor/invalid-descriptor' }
         @{ Family = 'Member entitlements (read)';   Scope = 'vso.memberentitlementmanagement'; NeededFor = 'apply (member UPN lookup)'; Method = 'GET'; Path = '_apis/userentitlements?top=1' }
-        @{ Family = 'Security (ACL read/manage)';   Scope = 'vso.security_manage / Full access'; NeededFor = 'apply (pipeline folder ACLs)'; Method = 'GET'; Path = "_apis/accesscontrollists/$script:PipelineBuildNamespaceId" }
+        # A well-formed POST with an EMPTY accessControlEntries list is a no-op
+        # that still exercises the WRITE permission check — a GET on the ACL
+        # list passes with read-capable PATs that cannot write ACLs.
+        @{ Family = 'Security (ACL manage)';        Scope = 'vso.security_manage / Full access'; NeededFor = 'apply (pipeline folder ACLs, structural authority)'; Method = 'POST'; Path = "_apis/accesscontrolentries/$script:PipelineBuildNamespaceId"; Body = @{ token = 'governance-scope-probe'; merge = $true; accessControlEntries = @() } }
     )
 }
 
@@ -562,6 +565,30 @@ function Find-AdoUserDescriptor {
     if ($LASTEXITCODE -ne 0 -or [string]::IsNullOrWhiteSpace($json)) { return $null }
     $user = ($json | ConvertFrom-Json).user
     return $user.subjectDescriptor ?? $user.descriptor
+}
+
+function Find-AdoUserSuggestion {
+    <#
+        .SYNOPSIS
+        Best-effort near-match lookup for a UPN that failed to resolve: splits
+        the local part into name tokens and searches org entitlements for each,
+        so 'alex.rivers@corp.com' can surface 'ARivers@corp.com'. Display
+        only — never used for a compliance decision, so failures return empty.
+    #>
+    [CmdletBinding()]
+    param([string]$OrgUrl, [string]$Upn)
+    $suggestions = @{}
+    $tokens = @((($Upn -split '@')[0] -split '[._-]') | Where-Object { $_.Length -ge 3 })
+    foreach ($t in $tokens) {
+        try {
+            $r = Invoke-AdoRest -OrgUrl $OrgUrl -Path "_apis/userentitlements?`$filter=name eq '$t'" `
+                -ApiVersion '7.1-preview.3'
+            foreach ($m in @($r.members) + @($r.items)) {
+                if ($m.user.principalName) { $suggestions[$m.user.principalName] = $m.user.displayName }
+            }
+        } catch { Write-Verbose "Find-AdoUserSuggestion('$t'): $_" }
+    }
+    return @($suggestions.GetEnumerator() | ForEach-Object { "$($_.Key) ($($_.Value))" })
 }
 
 function Add-AdoGroupMember {

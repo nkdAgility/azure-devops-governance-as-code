@@ -363,8 +363,16 @@ function Invoke-GovernanceReconcile {
                     $upn   = [string]$m.upn
                     $mDesc = Find-AdoUserDescriptor -OrgUrl $OrgUrl -Upn $upn
                     if (-not $mDesc) {
-                        $findings.Add("UNRESOLVABLE member '$upn' in '$($grp.ado)'")
-                        & $rError "unresolvable user '$upn' in '$($grp.ado)'"
+                        # Say WHY: either the org knows a near-match (config has
+                        # the wrong UPN) or the user is not in the org at all.
+                        $near = @(Find-AdoUserSuggestion -OrgUrl $OrgUrl -Upn $upn)
+                        $why  = if ($near.Count -gt 0) {
+                            "no org member has this exact UPN - did you mean: $($near -join ', ')?"
+                        } else {
+                            "no org member matches this UPN - the user must be added to the org (Entra membership alone is not enough) before governance can grant them access"
+                        }
+                        $findings.Add("UNRESOLVABLE member '$upn' in '$($grp.ado)': $why")
+                        & $rError "unresolvable user '$upn' in '$($grp.ado)': $why"
                         $unresolved = $true
                         continue
                     }
@@ -717,6 +725,13 @@ function Invoke-GovernanceReconcile {
                     }
                 }
 
+                # If NO configured level exists in this process, reconciling
+                # visibility would hide every level — wrong, and rejected by
+                # ADO (VS402489). The findings above are the real problem: the
+                # config names must match the process before visibility can
+                # be enforced.
+                if (@($team.backlogs | Where-Object { $_ -in $levelNames }).Count -eq 0) { continue }
+
                 $desiredVis = @{}
                 $driftItems = [System.Collections.Generic.List[string]]::new()
                 foreach ($lvl in $levels) {
@@ -738,9 +753,13 @@ function Invoke-GovernanceReconcile {
                             -Team $team.name -Visibilities $desiredVis
                         & $rFixed "team: $($team.name)  backlog levels"
                     } catch {
+                        # ADO REST errors carry a JSON body; surface just the
+                        # message, not the whole serialized exception object.
+                        $msg = "$_"
+                        try { $msg = ("$_" | ConvertFrom-Json).message } catch {}
                         foreach ($d in $driftItems) { $findings.Add($d) }
-                        $findings.Add("ERROR setting backlog levels for '$($team.name)': $_")
-                        & $rError "set backlog levels '$($team.name)': $_"
+                        $findings.Add("ERROR setting backlog levels for '$($team.name)': $msg")
+                        & $rError "set backlog levels '$($team.name)': $msg"
                     }
                 } else {
                     foreach ($d in $driftItems) { $findings.Add($d) }
@@ -865,7 +884,20 @@ function Invoke-GovernanceReconcile {
     # ── Findings summary ──────────────────────────────────────────────────────
     $exceptions = @($findings | Where-Object { $_ -like 'AUDIT EXCEPTION*' })
     $missing    = @($findings | Where-Object { $_ -like 'MISSING*' })
-    $drift      = @($findings | Where-Object { $_ -notlike 'AUDIT EXCEPTION*' -and $_ -notlike 'MISSING*' })
+    $errors     = @($findings | Where-Object { $_ -like 'ERROR*' -or $_ -like 'UNRESOLVABLE*' })
+    $drift      = @($findings | Where-Object {
+        $_ -notlike 'AUDIT EXCEPTION*' -and $_ -notlike 'MISSING*' -and
+        $_ -notlike 'ERROR*' -and $_ -notlike 'UNRESOLVABLE*' })
+
+    # Group each error under its diagnosed root cause so the summary reads as
+    # "here is what failed and WHY", not a wall of identical stack noise.
+    $errorsByWhy = [ordered]@{}
+    foreach ($e in $errors) {
+        $why = Resolve-GovernanceErrorReason -Finding $e
+        if (-not $why) { $why = 'cause not yet diagnosed - investigate, then teach Resolve-GovernanceErrorReason the signature' }
+        if (-not $errorsByWhy.Contains($why)) { $errorsByWhy[$why] = [System.Collections.Generic.List[string]]::new() }
+        $errorsByWhy[$why].Add($e)
+    }
 
     Write-Host ''
     if ($findings.Count -eq 0) {
@@ -885,8 +917,15 @@ function Invoke-GovernanceReconcile {
             Write-Host "`n  Drift ($($drift.Count)):" -ForegroundColor Red
             $drift | ForEach-Object { Write-Host "    * $_" -ForegroundColor Red }
         }
+        if ($errors.Count -gt 0) {
+            Write-Host "`n  Errors and why ($($errors.Count)):" -ForegroundColor Red
+            foreach ($why in $errorsByWhy.Keys) {
+                Write-Host "    WHY: $why" -ForegroundColor Yellow
+                foreach ($e in $errorsByWhy[$why]) { Write-Host "      * $e" -ForegroundColor Red }
+            }
+        }
         if ($exceptions.Count -gt 0) {
-            Write-Host "`n  Audit exceptions — exist in ADO but not in config ($($exceptions.Count)):" -ForegroundColor Magenta
+            Write-Host "`n  Audit failures — exist in ADO but not in config ($($exceptions.Count)):" -ForegroundColor Magenta
             $exceptions | ForEach-Object { Write-Host "    * $_" -ForegroundColor Magenta }
         }
     }
@@ -905,10 +944,15 @@ function Invoke-GovernanceReconcile {
         $lines.Add("Generated: $(Get-Date -Format 'o')")
         $lines.Add("Findings : $($findings.Count)")
         $lines.Add('')
+        $errorReportItems = @(foreach ($why in $errorsByWhy.Keys) {
+            "WHY: $why"
+            foreach ($e in $errorsByWhy[$why]) { "  - $e" }
+        })
         foreach ($section in @(
             @{ label = 'MISSING'; items = $missing },
             @{ label = 'DRIFT';   items = $drift },
-            @{ label = 'AUDIT EXCEPTIONS (exist in ADO but not in config)'; items = $exceptions }
+            @{ label = 'ERRORS AND WHY'; items = $errorReportItems },
+            @{ label = 'AUDIT FAILURES (exist in ADO but not in config)'; items = $exceptions }
         )) {
             if ($section.items.Count -eq 0) { continue }
             $lines.Add("$($section.label) ($($section.items.Count)):")
@@ -928,7 +972,11 @@ function Invoke-GovernanceReconcile {
                      elseif ($_ -like 'UNRESOLVABLE*')     { 'unresolvable' }
                      elseif ($_ -like 'ERROR*')            { 'error' }
                      else                                  { 'drift' }
-            [ordered]@{ class = $class; message = $_ }
+            $entry = [ordered]@{ class = $class; message = $_ }
+            if ($class -in 'error', 'unresolvable') {
+                $entry['why'] = Resolve-GovernanceErrorReason -Finding $_
+            }
+            $entry
         })
         [ordered]@{
             program      = $Resolved.program
@@ -948,4 +996,42 @@ function Invoke-GovernanceReconcile {
     }
 
     return $findings.ToArray()
+}
+
+function Resolve-GovernanceErrorReason {
+    <#
+        .SYNOPSIS
+        Maps an ERROR/UNRESOLVABLE finding to its known root cause, so the
+        summary can print "here is WHY" instead of a bare failure. Returns
+        $null for signatures not yet diagnosed — when you diagnose a new one,
+        add its pattern here.
+    #>
+    [CmdletBinding()]
+    param([Parameter(Mandatory)][string]$Finding)
+
+    if ($Finding -match '401|Unauthorized|requires user authentication') {
+        if ($Finding -match 'ACL|structural authority') {
+            return "the PAT cannot WRITE security ACLs. The required scope (vso.security_manage) is not selectable in the PAT UI - use a Full access PAT, then verify with 'doctor'."
+        }
+        return "the PAT is missing a scope for this resource family - run 'doctor' to identify which."
+    }
+    if ($Finding -match 'did you mean:') {
+        return "the configured UPN does not exist in the org, but a near-match does - fix the UPN in members/<code>.yaml."
+    }
+    if ($Finding -like 'UNRESOLVABLE member*') {
+        return "no org member matches this UPN - the user must be added to the Azure DevOps org before governance can grant access."
+    }
+    if ($Finding -like 'UNRESOLVABLE nested group*') {
+        return "no ADO group with this name exists in the project - an Entra group must be surfaced in ADO (added to any group once) before it can be nested by governance."
+    }
+    if ($Finding -match 'does not exist in the process' -or $Finding -match 'not in process') {
+        return "cadence.yaml teamTypes backlogs must use THIS process's backlog level names - the finding lists the valid names."
+    }
+    if ($Finding -match 'VS402489') {
+        return "none of the configured backlog levels exist in the process, so reconcile would hide every level and ADO refuses - fix the names in cadence.yaml."
+    }
+    if ($Finding -match 'controller for path|does not implement IController') {
+        return "the REST call went to the wrong service host - this is an engine bug in host routing (Resolve-AdoRequestUri); report it."
+    }
+    return $null
 }
