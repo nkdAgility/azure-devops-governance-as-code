@@ -230,11 +230,40 @@ function Resolve-AdoRequestUri {
     return "$($effective.TrimEnd('/'))/$Path"
 }
 
+function Get-AdoEntraToken {
+    <#
+        .SYNOPSIS
+        Acquires an Entra access token for Azure DevOps from the Azure CLI
+        (az login) session, cached for the run. Entra tokens carry the user's
+        real permissions and are not PAT-scope-limited — the only route to
+        security-namespace WRITES when org policy forbids full-access PATs
+        (vso.security_manage is not selectable in the PAT UI).
+        With -Optional, returns $null instead of throwing when az login is
+        unavailable.
+    #>
+    [CmdletBinding()]
+    param([switch]$Optional)
+    if ($script:AdoEntraToken -and $script:AdoEntraTokenExpires -gt (Get-Date).AddMinutes(5)) {
+        return $script:AdoEntraToken
+    }
+    # 499b84ac-1321-427f-aa17-267ca6975798 is the Azure DevOps resource id.
+    $json = az account get-access-token --resource '499b84ac-1321-427f-aa17-267ca6975798' --output json 2>$null
+    if ($LASTEXITCODE -ne 0 -or [string]::IsNullOrWhiteSpace($json)) {
+        if ($Optional) { return $null }
+        throw "Cannot acquire an Entra token for Azure DevOps. Security ACL writes need it when the PAT lacks vso.security_manage (not selectable in the PAT UI) and org policy forbids full-access PATs. Run 'az login' with the account that has access to the target org, then retry."
+    }
+    $tok = $json | ConvertFrom-Json
+    $script:AdoEntraToken        = $tok.accessToken
+    $script:AdoEntraTokenExpires = [datetime]$tok.expiresOn
+    return $script:AdoEntraToken
+}
+
 function Invoke-AdoRest {
     <#
         .SYNOPSIS
         Generic REST helper for Azure DevOps API calls.
-        Requires $env:AZURE_DEVOPS_EXT_PAT to be set (via Set-AdoAuth).
+        Auth 'pat' (default) requires $env:AZURE_DEVOPS_EXT_PAT (Set-AdoAuth);
+        Auth 'entra' sends a Bearer token from the az login session instead.
     #>
     [CmdletBinding()]
     param(
@@ -242,12 +271,17 @@ function Invoke-AdoRest {
         [Parameter(Mandatory)][string]$Path,
         [string]$Method     = 'GET',
         [object]$Body       = $null,
-        [string]$ApiVersion = '7.1'
+        [string]$ApiVersion = '7.1',
+        [ValidateSet('pat', 'entra')][string]$Auth = 'pat'
     )
-    $encoded = [Convert]::ToBase64String(
-        [Text.Encoding]::ASCII.GetBytes(":$($env:AZURE_DEVOPS_EXT_PAT)"))
     # Accept: application/json is required — without it ADO returns an HTML page (HTTP 203).
-    $headers = @{ Authorization = "Basic $encoded"; Accept = 'application/json' }
+    $headers = if ($Auth -eq 'entra') {
+        @{ Authorization = "Bearer $(Get-AdoEntraToken)"; Accept = 'application/json' }
+    } else {
+        $encoded = [Convert]::ToBase64String(
+            [Text.Encoding]::ASCII.GetBytes(":$($env:AZURE_DEVOPS_EXT_PAT)"))
+        @{ Authorization = "Basic $encoded"; Accept = 'application/json' }
+    }
     $uri     = Resolve-AdoRequestUri -OrgUrl $OrgUrl -Path $Path
     $sep     = if ($uri.Contains('?')) { '&' } else { '?' }
     $uri    += "${sep}api-version=$ApiVersion"
@@ -320,7 +354,10 @@ function Get-AdoScopeProbeSet {
         # A well-formed POST with an EMPTY accessControlEntries list is a no-op
         # that still exercises the WRITE permission check — a GET on the ACL
         # list passes with read-capable PATs that cannot write ACLs.
-        @{ Family = 'Security (ACL manage)';        Scope = 'vso.security_manage / Full access'; NeededFor = 'apply (pipeline folder ACLs, structural authority)'; Method = 'POST'; Path = "_apis/accesscontrolentries/$script:PipelineBuildNamespaceId"; Body = @{ token = 'governance-scope-probe'; merge = $true; accessControlEntries = @() } }
+        # EntraFallback: apply retries security writes with an az login token
+        # when the PAT 401s, so doctor probes the same fallback before
+        # declaring the capability missing.
+        @{ Family = 'Security (ACL manage)';        Scope = 'vso.security_manage / Full access'; NeededFor = 'apply (pipeline folder ACLs, structural authority)'; Method = 'POST'; Path = "_apis/accesscontrolentries/$script:PipelineBuildNamespaceId"; Body = @{ token = 'governance-scope-probe'; merge = $true; accessControlEntries = @() }; EntraFallback = $true }
     )
 }
 
@@ -362,14 +399,37 @@ function Test-AdoAuthScope {
             $statusCode  = 0
             $contentType = ''
         }
+        $verdict = if ($statusCode -eq 0) { 'unknown' } else {
+            Resolve-AdoProbeVerdict -StatusCode $statusCode -ContentType $contentType
+        }
+
+        # Probe the same Entra fallback apply uses before declaring the
+        # capability missing — the PAT alone is not the whole story.
+        $note = $null
+        if ($verdict -eq 'missing' -and $probe.EntraFallback) {
+            $entra = Get-AdoEntraToken -Optional
+            if ($entra) {
+                $params['Headers'] = @{ Authorization = "Bearer $entra"; Accept = 'application/json' }
+                try {
+                    $resp        = Invoke-WebRequest @params
+                    $entraStatus = [int]$resp.StatusCode
+                    if ((Resolve-AdoProbeVerdict -StatusCode $entraStatus -ContentType ([string]$resp.Headers['Content-Type'])) -eq 'ok') {
+                        $verdict = 'ok'
+                        $note    = 'PAT lacks it; covered by the Entra fallback (az login)'
+                    }
+                } catch { }
+            } else {
+                $note = "PAT lacks it and no az login session found - run 'az login' to enable the Entra fallback"
+            }
+        }
+
         [pscustomobject]@{
             Family     = $probe.Family
             Scope      = $probe.Scope
             NeededFor  = $probe.NeededFor
             StatusCode = $statusCode
-            Verdict    = if ($statusCode -eq 0) { 'unknown' } else {
-                Resolve-AdoProbeVerdict -StatusCode $statusCode -ContentType $contentType
-            }
+            Verdict    = $verdict
+            Note       = $note
         }
     }
 }
@@ -754,9 +814,31 @@ function Set-AdoPipelineFolderAce {
             @{ descriptor = $IdentityDescriptor; allow = $AllowBits; deny = 0 }
         )
     }
-    Invoke-AdoRest -OrgUrl $OrgUrl `
-        -Path "_apis/accesscontrolentries/$script:PipelineBuildNamespaceId" `
-        -Method 'POST' -Body $body | Out-Null
+    Set-AdoAccessControlEntry -OrgUrl $OrgUrl -NamespaceId $script:PipelineBuildNamespaceId -Body $body
+}
+
+function Set-AdoAccessControlEntry {
+    <#
+        .SYNOPSIS
+        POSTs an ACE to a security namespace. Tries the PAT first; on 401
+        retries with an Entra token from the az login session —
+        vso.security_manage is not grantable in the PAT UI, and orgs that
+        forbid full-access PATs leave Entra as the only route to ACL writes.
+    #>
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)][string]$OrgUrl,
+        [Parameter(Mandatory)][string]$NamespaceId,
+        [Parameter(Mandatory)][hashtable]$Body
+    )
+    try {
+        Invoke-AdoRest -OrgUrl $OrgUrl -Path "_apis/accesscontrolentries/$NamespaceId" `
+            -Method 'POST' -Body $Body | Out-Null
+    } catch {
+        if ("$_" -notmatch '401|Unauthorized') { throw }
+        Invoke-AdoRest -OrgUrl $OrgUrl -Path "_apis/accesscontrolentries/$NamespaceId" `
+            -Method 'POST' -Body $Body -Auth entra | Out-Null
+    }
 }
 
 # ─── Area node security (structural authority) ────────────────────────────────
@@ -831,8 +913,7 @@ function Set-AdoAreaNodeAce {
             @{ descriptor = $IdentityDescriptor; allow = $AllowBits; deny = 0 }
         )
     }
-    Invoke-AdoRest -OrgUrl $OrgUrl -Path "_apis\accesscontrolentries\$script:CssNamespaceId" `
-        -Method 'POST' -Body $body | Out-Null
+    Set-AdoAccessControlEntry -OrgUrl $OrgUrl -NamespaceId $script:CssNamespaceId -Body $body
 }
 
 # NOTE (spike pending): making the admin group a Team Administrator of the

@@ -41,7 +41,9 @@ The PAT must carry these scopes (Azure DevOps → User settings → Personal acc
 | `vso.build` / `vso.build_execute` | Build — Read & execute | plan/audit; apply creates pipeline folders |
 | `vso.graph` / `vso.graph_manage` | Graph — Read & manage | group membership read; apply creates groups and members |
 | `vso.memberentitlementmanagement` | Member Entitlement Management — Read | apply resolves member UPNs to descriptors |
-| `vso.security_manage` | *(not in the PAT UI — requires Full access)* | apply stamps pipeline folder ACLs |
+| `vso.security_manage` | *(not in the PAT UI — Full access PAT, or the Entra fallback below)* | apply stamps pipeline folder ACLs + structural authority |
+
+**Security writes without a Full access PAT:** many orgs forbid full-access PATs. `apply` therefore retries security ACL writes with an **Entra token** from the operator's `az login` session (acquired via `az account get-access-token`, never stored). Entra tokens carry the user's real permissions and are not PAT-scope-limited. `doctor` probes the same fallback and reports `covered by the Entra fallback (az login)` — or tells you to `az login` if neither route works.
 
 **Verify, don't guess:** `./build.ps1 doctor -Program <name>` probes every scope family against the live org with side-effect-free calls (reads, plus intentionally invalid writes that ADO rejects *after* the scope check — HTTP 400 proves the scope, nothing is ever created). It exits non-zero listing the missing scopes. Run it before the first `apply` with a new PAT. The probe matrix lives in `Get-AdoScopeProbeSet` (`AzureDevOps.ps1`); if you add a resource type that calls a new API family, add a probe for it.
 

@@ -39,6 +39,7 @@ function Test-GovernanceAccess {
             'missing' { Write-Host ("  [MISSING] {0,-28} {1,-28} needed for: {2}" -f $r.Family, $r.Scope, $r.NeededFor) -ForegroundColor Red }
             default   { Write-Host ("  [?]       {0,-28} {1,-28} probe inconclusive (HTTP {3}); needed for: {2}" -f $r.Family, $r.Scope, $r.NeededFor, $r.StatusCode) -ForegroundColor Yellow }
         }
+        if ($r.Note) { Write-Host ("            note: {0}" -f $r.Note) -ForegroundColor Yellow }
     }
 
     # A missing scope is a finding, not a malfunction — report it as normal
