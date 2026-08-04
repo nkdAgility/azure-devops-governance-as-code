@@ -41,11 +41,17 @@ function Test-GovernanceAccess {
         }
     }
 
+    # A missing scope is a finding, not a malfunction — report it as normal
+    # output and return $false so the caller can set the exit code. Throwing
+    # here would dress a successful diagnosis up as a crash.
     $missing = @($results | Where-Object Verdict -eq 'missing')
     if ($missing.Count -gt 0) {
-        Write-Error ("PAT is missing {0} scope(s): {1}. Reissue the PAT with these scopes (or use Full access) and retry." -f
-            $missing.Count, (($missing | ForEach-Object { $_.Scope }) -join ', '))
-        return
+        Write-Host ""
+        Write-Host ("PAT is missing {0} scope(s): {1}" -f $missing.Count,
+            (($missing | ForEach-Object { $_.Scope }) -join ', ')) -ForegroundColor Red
+        Write-Host "Add these scopes to the PAT (or use Full access) and re-run doctor." -ForegroundColor Red
+        return $false
     }
     Write-Host "All scope probes passed." -ForegroundColor Green
+    return $true
 }

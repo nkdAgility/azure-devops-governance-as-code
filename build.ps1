@@ -151,6 +151,6 @@ foreach ($programPath in $programPaths) {
         'plan'     { Invoke-GovernancePlan   -ProgramPath $programPath -ResolvedPath $resolvedPath -Org $Org }
         'apply'    { Invoke-GovernanceApply  -ProgramPath $programPath -ResolvedPath $resolvedPath -Org $Org -WhatIf:$WhatIf -Prune:$Prune }
         'audit'    { Invoke-GovernanceAudit  -ProgramPath $programPath -ResolvedPath $resolvedPath -Org $Org }
-        'doctor'   { Test-GovernanceAccess   -ProgramPath $programPath -Org $Org }
+        'doctor'   { if (-not (Test-GovernanceAccess -ProgramPath $programPath -Org $Org)) { exit 1 } }
     }
 }
