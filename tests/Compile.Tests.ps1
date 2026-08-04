@@ -75,7 +75,7 @@ Describe 'Compile stage' {
         ($script:resolved.teams | Where-Object name -like '*Open API*') | Should -BeNullOrEmpty
     }
 
-    It 'routes Colors ownership into the Graphics Pipeline (GPI) area config' {
+    It 'sideloads Colors onto the Graphics Pipeline (GPI) board' {
         $gpi = $script:resolved.teams | Where-Object short -eq 'GPI'
         $gpi.areaConfig.path | Should -Contain '\Odyssey\Colors'
     }
@@ -84,7 +84,7 @@ Describe 'Compile stage' {
         ($script:resolved.teams | Where-Object name -eq 'Colors') | Should -BeNullOrEmpty
     }
 
-    It 'adds owned plugin paths to the owning team area config' {
+    It 'adds sideloaded plugin paths to the consuming team area config' {
         $fnd = $script:resolved.teams | Where-Object short -eq 'FND'
         $fnd.areaConfig.path | Should -Contain '\Odyssey\Portal\Plugins\Plugin A'
     }
@@ -230,12 +230,32 @@ Describe 'Compile stage' {
         $admin.members[0].reason | Should -Match 'structural authority'
     }
 
-    It 'projects structural authority entries covering the governed area paths' {
+    It 'projects structural authority over the team home area only' {
         $ptl = $script:resolved.structuralAuthority | Where-Object group -eq 'PTL-Admins'
         $ptl | Should -Not -BeNullOrEmpty
         $ptl.paths | Should -Contain '\Odyssey\Portal'
         $gpi = $script:resolved.structuralAuthority | Where-Object group -eq 'PTL-GPI-Admins'
-        $gpi.paths | Should -Contain '\Odyssey\Colors'
+        $gpi.paths | Should -Contain '\Odyssey\Portal\Platform\Graphics Pipeline'
+    }
+
+    It 'sideload carries zero security: no authority over sideloaded paths' {
+        $gpi = $script:resolved.structuralAuthority | Where-Object group -eq 'PTL-GPI-Admins'
+        $gpi.paths | Should -Not -Contain '\Odyssey\Colors'
+        $gpi.paths | Should -Not -Contain '\Odyssey\Portal\Plugins\Plugin B'
+        $gpi.paths | Should -Not -Contain '\Odyssey\Portal\Platform\Stream Modeling'
+        $fnd = $script:resolved.structuralAuthority | Where-Object group -eq 'PTL-FND-Admins'
+        $fnd.paths | Should -Not -Contain '\Odyssey\Portal\Plugins\Plugin A'
+    }
+
+    It 'rejects the removed owner: keyword with a migration hint' {
+        InModuleScope AdoGovernance {
+            { Resolve-Governance -Manifest @{ program = 'Demo'; org = 'demo' } `
+                -Source @{ products = @(@{ name = 'P'; short = 'P'; dpm = 1
+                    sections = @(@{ name = 'Band'; items = @(@{ name = 'X'; owner = 'P-Y' }) }) }) } `
+                -Access @{ teamGroups = @(); containerGroups = @(); roles = @{};
+                           stakeholders = @{ accessLevel = 'stakeholder'; ado = 'D-S'; scope = 'org' } } `
+                -SourceHash 'x' } | Should -Throw "*'owner:', which has been removed*"
+        }
     }
 
     It 'excludes expired member entries from the desired state' {

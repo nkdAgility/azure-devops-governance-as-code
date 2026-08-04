@@ -699,10 +699,14 @@ function Invoke-GovernanceReconcile {
 
     # ── 4. Team iteration scope — runs after both teams and iteration paths exist ──
     # Exact-match: each team subscribes to precisely its in-scope window.
-    # Out-of-window subscriptions are drift and are REMOVED in apply — the
-    # iteration PATHS themselves are never touched (ADR-005), only the team's
-    # view of them. Runs in all modes so audit reports subscription drift too.
+    # ROLLING MAINTENANCE, not compliance: the window is time-based and slides
+    # daily, so keeping it current must not require an apply. Audit performs
+    # the roll too (the scheduled audit keeps every team's window fresh) and
+    # none of it is a finding — only real errors are. WhatIf stays dry.
+    # The iteration PATHS themselves are never touched (ADR-005), only the
+    # team's view of them.
     if ($Resolved.iterations -and $Resolved.iterations.config) {
+        $doRoll = ($Mode -in @('Apply', 'Audit'))
         Write-Host "`n--- Team iteration scope ---" -ForegroundColor Cyan
 
         $itCfg   = $Resolved.iterations.config
@@ -727,19 +731,17 @@ function Invoke-GovernanceReconcile {
 
             # The team's backlog iteration must be the PROJECT ROOT — rolling
             # windows span execution years, and ADO hides every subscription
-            # outside the backlog-iteration subtree. A year-pinned root is
-            # drift; apply corrects it.
+            # outside the backlog-iteration subtree. Part of the rolling
+            # maintenance: corrected in apply AND audit, never a finding.
             if ($iterRootId) {
                 try {
                     $currentRoot = Get-AdoTeamBacklogIterationId -OrgUrl $OrgUrl -Project $project -Team $team.name
                     if ($currentRoot -and $currentRoot -ne $iterRootId) {
-                        if ($doFix) {
+                        if ($doRoll) {
                             Set-AdoTeamBacklogIteration -OrgUrl $OrgUrl -Project $project -Team $team.name -IterationId $iterRootId
                             & $rFixed "team: $($team.name)  backlog iteration -> project root"
                         } else {
-                            $findings.Add("DRIFT team '$($team.name)': backlog iteration is not the project root — subscriptions outside its subtree are invisible to the team")
-                            if ($Mode -eq 'WhatIf') { & $rWould "set backlog iteration to project root for team: $($team.name)" }
-                            else                     { & $rDrift "team '$($team.name)': backlog iteration not project root" }
+                            & $rWould "set backlog iteration to project root for team: $($team.name)"
                         }
                     }
                 } catch {
@@ -780,23 +782,17 @@ function Invoke-GovernanceReconcile {
 
                 if ($missingIds.Count -eq 0 -and $extraIds.Count -eq 0) {
                     & $rOk "team: $($team.name)  (iteration scope current: $scope)"
-                } elseif ($doFix) {
+                } elseif ($doRoll) {
                     foreach ($guid in $missingIds) {
                         Add-AdoTeamIteration -OrgUrl $OrgUrl -Project $project -Team $team.name -IterationId $guid
                     }
                     foreach ($guid in $extraIds) {
                         Remove-AdoTeamIteration -OrgUrl $OrgUrl -Project $project -Team $team.name -IterationId $guid
                     }
-                    & $rFixed "team: $($team.name)  (+$($missingIds.Count)/-$($extraIds.Count) iteration subscription(s))"
+                    & $rFixed "team: $($team.name)  (rolled window +$($missingIds.Count)/-$($extraIds.Count) iteration subscription(s))"
                 } else {
-                    if ($missingIds.Count -gt 0) {
-                        $findings.Add("DRIFT team '$($team.name)': $($missingIds.Count) in-scope iteration(s) not subscribed")
-                    }
-                    if ($extraIds.Count -gt 0) {
-                        $findings.Add("DRIFT team '$($team.name)': $($extraIds.Count) iteration subscription(s) outside the scope window")
-                    }
-                    if ($Mode -eq 'WhatIf') { & $rWould "correct iteration scope for team: $($team.name) (+$($missingIds.Count)/-$($extraIds.Count))" }
-                    else                     { & $rDrift "team: $($team.name)  iteration scope (+$($missingIds.Count)/-$($extraIds.Count))" }
+                    # WhatIf: dry run — report, never a finding (rolling maintenance).
+                    & $rWould "roll iteration window for team: $($team.name) (+$($missingIds.Count)/-$($extraIds.Count))"
                 }
             } catch {
                 $findings.Add("ERROR reconciling iteration scope for '$($team.name)': $_")

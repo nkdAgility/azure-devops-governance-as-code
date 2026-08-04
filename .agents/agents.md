@@ -113,7 +113,7 @@ This is not a provisioning helper that creates missing things and moves on. It i
 | `validate` | Same checks as build but writes nothing. |
 | `plan` | Diff resolved desired state vs live ADO. Lists every change that `apply` would make. **Read-only.** |
 | `apply` | Reconcile live ADO to resolved desired state. Creates missing resources **and corrects misconfigured ones**. Supports `-WhatIf`. With `-Prune` (or manifest `settings.prune: true`) also **deletes** orphans — teams, area paths, repos, and extra group members that exist in ADO but not in config. Prune is **never on by default**; `scope: future` placeholders, the project default team/repo, and iteration paths (ADR-005) are never pruned. |
-| `audit` | Read-only compliance report. Reports every resource that deviates from desired state — missing, extra, or wrongly configured. |
+| `audit` | Read-only compliance report. Reports every resource that deviates from desired state — missing, extra, or wrongly configured. **Exception (by design):** rolling iteration-window maintenance (team sprint/season subscriptions + backlog-iteration root) is time-based upkeep, so audit *performs* it rather than reporting it — it never produces findings and never requires an apply. |
 
 ---
 
@@ -145,9 +145,10 @@ This is not a provisioning helper that creates missing things and moves on. It i
 
 ### Hierarchy node kinds
 - **team** (`portfolio`/`structural`/`delivery`) — real ADO team.
-- **sideload** — `sideload: <code>` (or a list): area path only, added to every listed team's area config. `owner:` is a deprecated alias. A node with `sideload:` **and** an explicit `type:` is both: its own team, and additionally sideloaded into the listed teams.
+- **sideload** — `sideload: <code>` (or a list): **area-path visibility ONLY** — the path joins the listed teams' boards and nothing else. Zero security: structural authority always stays with a team's home area. A node with `sideload:` **and** an explicit `type:` is both: its own team, plus board visibility for the listed teams. (`owner:` has been **removed** — using it fails the build with a migration hint.)
 - **area** — `team: none`: governed structure attached to nothing.
 - Product `sections` are free-form: `- name: <display name>` / `items: [...]` — any number of bands, any characters in names.
+- Team security is expressed only via `access.yaml` roles, `members/<code>.yaml`, and home-area structural authority — never via area-path attachment.
 
 ### Pipeline folders
 - Every folder in `resolved.pipelineFolders` exists.

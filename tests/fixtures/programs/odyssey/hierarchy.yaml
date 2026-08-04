@@ -7,8 +7,9 @@
 #   - `sections` registers the bands: - name: <display name> / items: [...]
 #     (display names are free-form — parentheses etc. are fine)
 #   - `sideload: <code>` (or a list) = area path here, added to the sideloading
-#     team(s)' area config, no team of its own. `owner:` is a deprecated alias.
+#     team(s)' boards. Area-path visibility ONLY — never security/authority.
 #     With an explicit `type:` the node is BOTH its own team AND sideloaded.
+#     (`owner:` has been removed — sideload is the only attachment keyword.)
 #   - `team: none` = governed structure attached to nothing (no team, no owner)
 #   - `repos:` = repos owned by the node's team (or its first sideloader):
 #     everyone reads, the owning team writes; `innerOSS: true` additionally
@@ -110,7 +111,7 @@ products:
   - name: Colors
     dpm: 106
     short: CLR
-    owner: PTL-GPI     # deprecated alias of sideload: — still supported
+    sideload: PTL-GPI  # on GPI's board; no team, no authority granted
 
   # ── Future: not in current migration scope ──
   - { name: Trace Log,  dpm: 107, short: TLG, scope: future }

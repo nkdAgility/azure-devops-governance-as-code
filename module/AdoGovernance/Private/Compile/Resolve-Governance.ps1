@@ -4,14 +4,12 @@
 #
 # Node kinds:
 #   team (delivery/structural/portfolio)  — real ADO team created
-#   owned      — `owner: <code>`: no team of its own; the owning team GOVERNS
-#                the path (structural authority for its -Admins group) and its
-#                board includes it
 #   sideload   — `sideload: <code>` (or a list): area path ONLY — added to the
-#                listed teams' boards, NO authority granted
+#                listed teams' boards. ZERO security: structural authority
+#                always stays with the team's home area. (`owner:` removed.)
 #   area       — `team: none`: governed structure attached to nothing
-# A node with `owner:`/`sideload:` AND an explicit `type:` is BOTH: its own
-# team, plus the owner/sideload effects for the listed teams.
+# A node with `sideload:` AND an explicit `type:` is BOTH: its own team, plus
+# board visibility for the listed teams.
 
 # Team types drive planning behaviour: area sub-tree visibility, backlog levels,
 # and iteration scope. Position in the tree supplies the default type; nodes in
@@ -55,23 +53,6 @@ function Get-TeamTypeDefs {
         }
     }
     return $defs
-}
-
-function Add-OwnedEntry {
-    <# Records that a node's area path is GOVERNED by another team: the path
-       joins the owner's board AND its -Admins group gets structural authority.
-       Keyed by the owner's product-qualified code (e.g. PTL-FND). #>
-    [CmdletBinding()]
-    param(
-        [Parameter(Mandatory)][hashtable]$Ctx,
-        [Parameter(Mandatory)][string]$Key,
-        [Parameter(Mandatory)][string]$Path,
-        [bool]$IncludeSubAreas
-    )
-    if (-not $Ctx.Owned.ContainsKey($Key)) {
-        $Ctx.Owned[$Key] = [System.Collections.Generic.List[object]]::new()
-    }
-    $Ctx.Owned[$Key].Add([ordered]@{ path = $Path; includeSubAreas = [bool]$IncludeSubAreas })
 }
 
 function Add-SideloadEntry {
@@ -152,38 +133,30 @@ function Add-TeamNode {
     $children       = @($Node.teams | Where-Object { $null -ne $_ })
     $hasChildren    = $children.Count -gt 0
 
-    $owners         = @(Get-NodeKeyList $Node.owner)
+    if ($null -ne $Node.owner) {
+        throw "hierarchy.yaml: node '$($Node.name)' uses 'owner:', which has been removed. Use 'sideload:' - it attaches the area path to the listed teams' boards and carries NO security."
+    }
     $sideloaders    = @(Get-NodeKeyList $Node.sideload)
     $isTeamless     = ("$($Node.team)" -eq 'none')
-    # owner/sideload WITHOUT an explicit type = area only; WITH a type = team too.
-    $isAreaOnly     = (-not $isTeamless) -and ($owners.Count + $sideloaders.Count) -gt 0 -and -not $Node.type
+    # sideload WITHOUT an explicit type = area only; WITH a type = team too.
+    $isAreaOnly     = (-not $isTeamless) -and $sideloaders.Count -gt 0 -and -not $Node.type
 
-    $kind = if ($isTeamless) { 'area' }
-            elseif ($isAreaOnly -and $owners.Count -gt 0) { 'owned' }
-            elseif ($isAreaOnly) { 'sideload' }
-            else { 'team' }
+    $kind = if ($isTeamless) { 'area' } elseif ($isAreaOnly) { 'sideload' } else { 'team' }
     $area = [ordered]@{ path = $path; kind = $kind }
     if ($Node.short) { $area.short = $Node.short; $area.code = $codePath }
-    if ($owners.Count -gt 0)      { $area.owner    = $owners }
     if ($sideloaders.Count -gt 0) { $area.sideload = $sideloaders }
     $Ctx.AreaPaths.Add($area)
 
-    # Repo ownership: the node's own team, else its (first) owner, else its
-    # first sideloader.
-    $repoOwner = if (-not $isTeamless -and -not $isAreaOnly) { $codePath }
-                 elseif ($owners.Count -gt 0) { $owners[0] }
-                 elseif ($sideloaders.Count -gt 0) { $sideloaders[0] }
-                 else { $null }
-    $nodeCode  = if ($Node.short) { $codePath } else { $null }
+    # Repo ownership: the node's own team, else its first sideloader.
+    $nodeCode = if ($Node.short) { $codePath } else { $null }
 
     if ($isTeamless) {
-        # Governed structure attached to nothing — no team, no owner.
+        # Governed structure attached to nothing — no team, no consumer.
         Add-NodeRepos -Ctx $Ctx -Node $Node -Path $path -OwnerKey $null -NodeCode $null
     }
     elseif ($isAreaOnly) {
-        foreach ($o in $owners)      { Add-OwnedEntry    -Ctx $Ctx -Key $o -Path $path -IncludeSubAreas $hasChildren }
         foreach ($s in $sideloaders) { Add-SideloadEntry -Ctx $Ctx -Key $s -Path $path -IncludeSubAreas $hasChildren }
-        Add-NodeRepos -Ctx $Ctx -Node $Node -Path $path -OwnerKey $repoOwner -NodeCode $nodeCode
+        Add-NodeRepos -Ctx $Ctx -Node $Node -Path $path -OwnerKey $sideloaders[0] -NodeCode $nodeCode
     }
     else {
         $type = if ($Node.type) { [string]$Node.type }
@@ -214,9 +187,8 @@ function Add-TeamNode {
             backlogs        = @($typeDef.backlogs)
             pipelineFolder  = $folder
         })
-        # Team + owner/sideload combo: the team exists AND the listed teams
-        # get the path (owners with authority, sideloaders board-only).
-        foreach ($o in $owners)      { Add-OwnedEntry    -Ctx $Ctx -Key $o -Path $path -IncludeSubAreas $hasChildren }
+        # Team + sideload combo: the team exists AND the listed teams see the
+        # path on their boards (board scope only, never authority).
         foreach ($s in $sideloaders) { Add-SideloadEntry -Ctx $Ctx -Key $s -Path $path -IncludeSubAreas $hasChildren }
         Add-NodeRepos -Ctx $Ctx -Node $Node -Path $path -OwnerKey $codePath -NodeCode $codePath
     }
@@ -250,8 +222,7 @@ function Resolve-Governance {
         Teams           = [System.Collections.Generic.List[object]]::new()
         Repos           = [System.Collections.Generic.List[object]]::new()
         PipelineFolders = [System.Collections.Generic.List[object]]::new()
-        Owned           = @{}   # code -> paths GOVERNED by that team (board + authority)
-        Sideloaded      = @{}   # code -> paths SIDELOADED onto that team (board only)
+        Sideloaded      = @{}   # code -> paths SIDELOADED onto that team (board only, zero security)
         TypeDefs        = $typeDefs
     }
 
@@ -276,36 +247,28 @@ function Resolve-Governance {
     foreach ($product in @($Source.products)) {
         $productPath = "$root\$($product.name)"
 
-        $owners         = @(Get-NodeKeyList $product.owner)
+        if ($null -ne $product.owner) {
+            throw "hierarchy.yaml: product '$($product.name)' uses 'owner:', which has been removed. Use 'sideload:' - it attaches the area path to the listed teams' boards and carries NO security."
+        }
         $sideloaders    = @(Get-NodeKeyList $product.sideload)
         $isTeamless     = ("$($product.team)" -eq 'none')
-        # owner/sideload WITHOUT an explicit type = area only; WITH a type = team too.
-        $isAreaOnly     = (-not $isTeamless) -and ($owners.Count + $sideloaders.Count) -gt 0 -and -not $product.type
+        # sideload WITHOUT an explicit type = area only; WITH a type = team too.
+        $isAreaOnly     = (-not $isTeamless) -and $sideloaders.Count -gt 0 -and -not $product.type
 
-        $kind = if ($isTeamless) { 'area' }
-                elseif ($isAreaOnly -and $owners.Count -gt 0) { 'owned' }
-                elseif ($isAreaOnly) { 'sideload' }
-                else { 'product' }
+        $kind = if ($isTeamless) { 'area' } elseif ($isAreaOnly) { 'sideload' } else { 'product' }
         $area = [ordered]@{ path = $productPath; kind = $kind }
         if ($product.short) { $area.short = $product.short; $area.code = $product.short }
         if ($null -ne $product.dpm) { $area.dpm = $product.dpm }
         if ($product.scope) { $area.scope = $product.scope }
-        if ($owners.Count -gt 0)      { $area.owner    = $owners }
         if ($sideloaders.Count -gt 0) { $area.sideload = $sideloaders }
         $ctx.AreaPaths.Add($area)
-
-        $productRepoOwner = if (-not $isTeamless -and -not $isAreaOnly) { $product.short }
-                            elseif ($owners.Count -gt 0) { $owners[0] }
-                            elseif ($sideloaders.Count -gt 0) { $sideloaders[0] }
-                            else { $null }
 
         if ($isTeamless) {
             Add-NodeRepos -Ctx $ctx -Node $product -Path $productPath -OwnerKey $null -NodeCode $null
         }
         elseif ($isAreaOnly) {
-            foreach ($o in $owners)      { Add-OwnedEntry    -Ctx $ctx -Key $o -Path $productPath -IncludeSubAreas $true }
             foreach ($s in $sideloaders) { Add-SideloadEntry -Ctx $ctx -Key $s -Path $productPath -IncludeSubAreas $true }
-            Add-NodeRepos -Ctx $ctx -Node $product -Path $productPath -OwnerKey $productRepoOwner -NodeCode $product.short
+            Add-NodeRepos -Ctx $ctx -Node $product -Path $productPath -OwnerKey $sideloaders[0] -NodeCode $product.short
         }
         else {
             # Products opt in the same way teams do: `pipelineFolder: true`
@@ -326,7 +289,6 @@ function Resolve-Governance {
             }
             if ($product.scope) { $teamObj.scope = $product.scope }
             $ctx.Teams.Add($teamObj)
-            foreach ($o in $owners)      { Add-OwnedEntry    -Ctx $ctx -Key $o -Path $productPath -IncludeSubAreas $true }
             foreach ($s in $sideloaders) { Add-SideloadEntry -Ctx $ctx -Key $s -Path $productPath -IncludeSubAreas $true }
             Add-NodeRepos -Ctx $ctx -Node $product -Path $productPath -OwnerKey $product.short -NodeCode $product.short
         }
@@ -351,7 +313,10 @@ function Resolve-Governance {
         }
     }
 
-    # Attach owned area paths + derive security groups per team.
+    # Attach sideloaded area paths + derive security groups per team.
+    # sideload is area-path visibility ONLY: it joins the team's areaConfig
+    # (board scope) but never its authorityPaths (structural authority stays
+    # with the team's home area alone).
     # Membership governance activates once ANY members file exists: from then on
     # every active (non-future) team must have one, and an empty role list means
     # "this group must have no members" — extras become drift, not noise.
@@ -361,10 +326,11 @@ function Resolve-Governance {
     foreach ($team in $ctx.Teams) {
         $areaConfig = [System.Collections.Generic.List[object]]::new()
         $areaConfig.Add([ordered]@{ path = $team.defaultAreaPath; includeSubAreas = $team.includeSubAreas })
-        if ($team.codePath -and $ctx.Owned.ContainsKey($team.codePath)) {
-            foreach ($entry in $ctx.Owned[$team.codePath]) { $areaConfig.Add($entry) }
+        if ($team.codePath -and $ctx.Sideloaded.ContainsKey($team.codePath)) {
+            foreach ($entry in $ctx.Sideloaded[$team.codePath]) { $areaConfig.Add($entry) }
         }
-        $team.areaConfig = $areaConfig
+        $team.areaConfig     = $areaConfig
+        $team.authorityPaths = @($team.defaultAreaPath)
 
         $groupSpecs = if ($team.kind -eq 'team') { $Access.teamGroups } else { $Access.containerGroups }
         $memberKey  = $team.codePath
@@ -452,8 +418,9 @@ function Resolve-Governance {
     }
 
     # Structural authority: each {key}-Admins group gets node-management rights
-    # over every area path its team governs (delegated ownership —
-    # structural permission only; admins need not be team members/contributors).
+    # over the team's HOME area only (delegated ownership — structural
+    # permission, not membership). Sideloaded paths carry ZERO security:
+    # board visibility never grants authority.
     $authority = [System.Collections.Generic.List[object]]::new()
     foreach ($team in $ctx.Teams) {
         if ($team.scope -eq 'future') { continue }
@@ -462,7 +429,7 @@ function Resolve-Governance {
         $authority.Add([ordered]@{
             group = $adminGroup.ado
             team  = $team.name
-            paths = @($team.areaConfig | ForEach-Object { $_.path })
+            paths = @($team.authorityPaths)
         })
     }
 
