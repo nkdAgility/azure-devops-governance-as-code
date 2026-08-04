@@ -93,6 +93,10 @@ Describe 'Compile stage' {
         ($script:resolved.repos | Where-Object name -eq 'PTL-PLGA-plugin-a') | Should -Not -BeNullOrEmpty
     }
 
+    It 'prefixes repo names with the node hierarchy code, spaces to dashes' {
+        ($script:resolved.repos | Where-Object name -eq 'PTL-PLGA-Test-Kit') | Should -Not -BeNullOrEmpty
+    }
+
     It 'sideloads a multi-consumer area into every listed team' {
         $gpi = $script:resolved.teams | Where-Object short -eq 'GPI'
         $fnd = $script:resolved.teams | Where-Object short -eq 'FND'

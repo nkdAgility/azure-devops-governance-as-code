@@ -138,7 +138,7 @@ This is not a provisioning helper that creates missing things and moves on. It i
 - Each group's **membership** matches its `members` list exactly — missing members and extra members are both findings.
 
 ### Repos
-- Every repo in `resolved.repos` exists. Repos are declared per node in `hierarchy.yaml` (`repos:` list); a node can own several.
+- Every repo in `resolved.repos` exists. Repos are declared per node in `hierarchy.yaml` (`repos:` list of bare names; a node can own several). Resolved names are always prefixed with the node's hierarchy code — `My Repo` on `PTL-FND` → `PTL-FND-My-Repo` (spaces become dashes).
 - Repos not in the resolved model are orphans.
 - Each repo's **ACL** matches the resolved model: everyone in the project reads (`Project Valid Users`), only the owning team's contributor group writes, and `innerOSS: true` additionally grants everyone branch creation + PR contribution (fork/PR flow, no direct push).
 - A repo's owner is the node's own team, or its first `sideload:` team when the node has no team.

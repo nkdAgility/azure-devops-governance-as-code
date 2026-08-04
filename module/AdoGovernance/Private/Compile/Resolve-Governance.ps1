@@ -80,29 +80,35 @@ function Get-NodeSideloadKeys {
 }
 
 function Add-NodeRepos {
-    <# Collects a node's declared repos. Each repo is owned by the node's own
-       team, or by its first sideloader when the node has no team. ACLs
-       (everyone reads, owner writes, innerOSS opens branch/PR contribution to
-       everyone) are attached later, once security groups exist. #>
+    <# Collects a node's declared repos. Entries are bare names (string or
+       { name, innerOSS }); the resolved repo name is ALWAYS prefixed with the
+       node's hierarchy code so repos sort under their node:
+       'My Repo' on PTL-FND -> 'PTL-FND-My-Repo' (spaces become dashes).
+       Each repo is owned by the node's own team, or by its first sideloader
+       when the node has no team. ACLs (everyone reads, owner writes, innerOSS
+       opens branch/PR contribution) are attached later, once groups exist. #>
     [CmdletBinding()]
     param(
         [Parameter(Mandatory)][hashtable]$Ctx,
         [Parameter(Mandatory)]$Node,
         [Parameter(Mandatory)][string]$Path,
-        [AllowNull()][AllowEmptyString()][string]$OwnerKey
+        [AllowNull()][AllowEmptyString()][string]$OwnerKey,
+        [AllowNull()][AllowEmptyString()][string]$NodeCode
     )
+    $prefix = if ($NodeCode) { $NodeCode } else { $OwnerKey }
     foreach ($r in @($Node.repos | Where-Object { $_ })) {
-        if (-not $r.name) {
+        $bare = if ($r -is [string]) { $r } else { [string]$r.name }
+        if (-not $bare) {
             throw "hierarchy.yaml: node '$($Node.name)' has a repo entry without a name."
         }
         if (-not $OwnerKey) {
             throw "hierarchy.yaml: node '$($Node.name)' declares repos but has no owning team - give it its own team or a sideload:."
         }
         $Ctx.Repos.Add([ordered]@{
-            name     = [string]$r.name
+            name     = "$prefix-$($bare.Trim() -replace '\s+', '-')"
             areaPath = $Path
             owner    = $OwnerKey
-            innerOSS = [bool]$r.innerOSS
+            innerOSS = if ($r -is [string]) { $false } else { [bool]$r.innerOSS }
         })
     }
 }
@@ -141,13 +147,14 @@ function Add-TeamNode {
 
     if ($isTeamless) {
         # Governed structure attached to nothing — no team, no sideloader.
-        Add-NodeRepos -Ctx $Ctx -Node $Node -Path $path -OwnerKey $null
+        Add-NodeRepos -Ctx $Ctx -Node $Node -Path $path -OwnerKey $null -NodeCode $null
     }
     elseif ($isSideloadOnly) {
         foreach ($s in $sideloaders) {
             Add-OwnedEntry -Ctx $Ctx -Key $s -Path $path -IncludeSubAreas $hasChildren
         }
-        Add-NodeRepos -Ctx $Ctx -Node $Node -Path $path -OwnerKey $sideloaders[0]
+        $nodeCode = if ($Node.short) { $codePath } else { $null }
+        Add-NodeRepos -Ctx $Ctx -Node $Node -Path $path -OwnerKey $sideloaders[0] -NodeCode $nodeCode
     }
     else {
         $type = if ($Node.type) { [string]$Node.type }
@@ -183,7 +190,7 @@ function Add-TeamNode {
         foreach ($s in $sideloaders) {
             Add-OwnedEntry -Ctx $Ctx -Key $s -Path $path -IncludeSubAreas $hasChildren
         }
-        Add-NodeRepos -Ctx $Ctx -Node $Node -Path $path -OwnerKey $codePath
+        Add-NodeRepos -Ctx $Ctx -Node $Node -Path $path -OwnerKey $codePath -NodeCode $codePath
     }
 
     foreach ($child in $children) {
@@ -254,13 +261,13 @@ function Resolve-Governance {
         $ctx.AreaPaths.Add($area)
 
         if ($isTeamless) {
-            Add-NodeRepos -Ctx $ctx -Node $product -Path $productPath -OwnerKey $null
+            Add-NodeRepos -Ctx $ctx -Node $product -Path $productPath -OwnerKey $null -NodeCode $null
         }
         elseif ($isSideloadOnly) {
             foreach ($s in $sideloaders) {
                 Add-OwnedEntry -Ctx $ctx -Key $s -Path $productPath -IncludeSubAreas $true
             }
-            Add-NodeRepos -Ctx $ctx -Node $product -Path $productPath -OwnerKey $sideloaders[0]
+            Add-NodeRepos -Ctx $ctx -Node $product -Path $productPath -OwnerKey $sideloaders[0] -NodeCode $product.short
         }
         else {
             # Products opt in the same way teams do: `pipelineFolder: true`
@@ -284,7 +291,7 @@ function Resolve-Governance {
             foreach ($s in $sideloaders) {
                 Add-OwnedEntry -Ctx $ctx -Key $s -Path $productPath -IncludeSubAreas $true
             }
-            Add-NodeRepos -Ctx $ctx -Node $product -Path $productPath -OwnerKey $product.short
+            Add-NodeRepos -Ctx $ctx -Node $product -Path $productPath -OwnerKey $product.short -NodeCode $product.short
         }
 
         # Free-form bands: each section is { name: <display name>, items: [...] }.

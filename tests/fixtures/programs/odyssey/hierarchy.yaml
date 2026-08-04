@@ -12,7 +12,9 @@
 #   - `team: none` = governed structure attached to nothing (no team, no owner)
 #   - `repos:` = repos owned by the node's team (or its first sideloader):
 #     everyone reads, the owning team writes; `innerOSS: true` additionally
-#     opens branch creation + PR contribution to everyone (fork/PR flow)
+#     opens branch creation + PR contribution to everyone (fork/PR flow).
+#     Entries are bare names — the node's hierarchy code is always prefixed
+#     ('My Repo' on PTL-FND -> 'PTL-FND-My-Repo'; spaces become dashes)
 #   - `short` is the LEAF code; a node's global key is the product-qualified
 #     chain of shorts (Portal's `GLI` -> `PTL-GLI`). Leaf shorts may repeat
 #     across products; the qualified code is unique across the program.
@@ -64,13 +66,14 @@ products:
           - name: Plugin A
             short: PLGA
             sideload: PTL-FND       # area managed by Foundation, no team
-            repos:
-              - name: PTL-PLGA-plugin-a
+            repos:                  # names are auto-prefixed with the node code
+              - plugin-a            #   -> PTL-PLGA-plugin-a
+              - Test Kit            #   -> PTL-PLGA-Test-Kit (spaces become dashes)
           - name: Plugin B
             short: PLGB
             sideload: [PTL-GPI, PTL-FND]   # two consumers; GPI (first) owns the repos
             repos:
-              - name: PTL-PLGB-plugin-b
+              - name: plugin-b             # -> PTL-PLGB-plugin-b
                 innerOSS: true             # everyone can branch + PR
           - name: Sandbox
             team: none              # governed structure attached to nothing
