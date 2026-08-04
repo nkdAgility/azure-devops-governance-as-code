@@ -247,6 +247,18 @@ Describe 'Compile stage' {
         $fnd.paths | Should -Not -Contain '\Odyssey\Portal\Plugins\Plugin A'
     }
 
+    It 'resolves teamAdmins from the members file (Team Administrator role)' {
+        $gpi = $script:resolved.teams | Where-Object short -eq 'GPI'
+        @($gpi.teamAdmins).Count | Should -Be 1
+        $gpi.teamAdmins[0].upn    | Should -Be 'alex.rivers@example.com'
+        $gpi.teamAdmins[0].reason | Should -Not -BeNullOrEmpty
+    }
+
+    It 'defaults teamAdmins to empty (team must have no administrators)' {
+        $fnd = $script:resolved.teams | Where-Object short -eq 'FND'
+        @($fnd.teamAdmins).Count | Should -Be 0
+    }
+
     It 'rejects the removed owner: keyword with a migration hint' {
         InModuleScope AdoGovernance {
             { Resolve-Governance -Manifest @{ program = 'Demo'; org = 'demo' } `

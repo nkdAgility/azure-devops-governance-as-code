@@ -2,3 +2,9 @@
 contributor: []
 reader: []
 admin: []
+
+# teamAdmins governs the ADO Team Administrator role on the team itself —
+# exact-match: an empty (or absent) list means the team must have NO admins.
+teamAdmins:
+  - upn: alex.rivers@example.com
+    reason: "Platform lead - administers the Graphics Pipeline team."

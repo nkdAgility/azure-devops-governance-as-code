@@ -872,10 +872,103 @@ function Invoke-GovernanceReconcile {
         }
     }
 
+    # ── 5c. Team administrators ───────────────────────────────────────────────
+    # members/<code>.yaml `teamAdmins:` governs the ADO Team Administrator role
+    # exactly: empty (or absent) list = the team must have NO administrators.
+    # Missing and extra admins are both findings; apply corrects both.
+    Write-Host "`n--- Team administrators ---" -ForegroundColor Cyan
+    foreach ($team in @($Resolved.teams | Where-Object { $_.scope -ne 'future' })) {
+        if (-not $liveTeamNames.Contains($team.name)) { continue }
+        $teamId = $liveTeams[$team.name]
+        if (-not $teamId) { continue }
+        if (-not $projectId) {
+            $projectId = Get-AdoProjectId -OrgUrl $OrgUrl -Project $project
+            if (-not $projectId) { & $rError "could not resolve project ID — skipping team administrator checks"; break }
+        }
+        try {
+            # Desired: resolve each entry (upn or governance group) to a
+            # security identity descriptor.
+            $desiredAdmins = @{}   # identityDescriptor -> display name
+            $unresolvedAdmin = $false
+            foreach ($m in @($team.teamAdmins | Where-Object { $_ })) {
+                $subjectDesc = $null
+                $display     = $null
+                if ($m.upn) {
+                    $display     = [string]$m.upn
+                    $subjectDesc = Find-AdoUserDescriptor -OrgUrl $OrgUrl -Upn $display
+                    if (-not $subjectDesc) {
+                        $near = @(Find-AdoUserSuggestion -OrgUrl $OrgUrl -Upn $display)
+                        $why  = if ($near.Count -gt 0) { "no org member has this exact UPN - did you mean: $($near -join ', ')?" }
+                                else { "no org member matches this UPN" }
+                        $findings.Add("UNRESOLVABLE team admin '$display' for '$($team.name)': $why")
+                        & $rError "unresolvable team admin '$display' for '$($team.name)': $why"
+                        $unresolvedAdmin = $true
+                        continue
+                    }
+                } elseif ($m.group) {
+                    $display     = [string]$m.group
+                    $subjectDesc = $liveGroups[$display]
+                    if (-not $subjectDesc) {
+                        $findings.Add("UNRESOLVABLE team admin group '$display' for '$($team.name)': no such group in ADO")
+                        & $rError "unresolvable team admin group '$display' for '$($team.name)'"
+                        $unresolvedAdmin = $true
+                        continue
+                    }
+                } else { continue }
+                if (-not $identityCache.ContainsKey($subjectDesc)) {
+                    $identityCache[$subjectDesc] = Get-AdoGroupIdentityDescriptor -OrgUrl $OrgUrl -SubjectDescriptor $subjectDesc
+                }
+                if ($identityCache[$subjectDesc]) { $desiredAdmins[$identityCache[$subjectDesc]] = $display }
+                else {
+                    $findings.Add("UNRESOLVABLE team admin '$display' for '$($team.name)': cannot resolve security identity")
+                    & $rError "unresolvable team admin '$display' for '$($team.name)': cannot resolve security identity"
+                    $unresolvedAdmin = $true
+                }
+            }
+
+            $liveAdmins = Get-AdoTeamAdminSet -OrgUrl $OrgUrl -ProjectId $projectId -TeamId $teamId
+            $missing = @($desiredAdmins.Keys | Where-Object { -not $liveAdmins.ContainsKey($_) })
+            # Never remove admins while any desired entry failed to resolve —
+            # a typo must not strip a team of every administrator.
+            $extra   = if ($unresolvedAdmin) { @() } else { @($liveAdmins.Keys | Where-Object { -not $desiredAdmins.ContainsKey($_) }) }
+
+            if ($missing.Count -eq 0 -and $extra.Count -eq 0) {
+                & $rOk "team admins: $($team.name)  ($($desiredAdmins.Count) admin(s))"
+            } elseif ($doFix) {
+                foreach ($d in $missing) {
+                    try {
+                        Add-AdoTeamAdmin -OrgUrl $OrgUrl -ProjectId $projectId -TeamId $teamId -IdentityDescriptor $d
+                        & $rCreated "team admin: $($desiredAdmins[$d]) -> $($team.name)"
+                    } catch {
+                        $findings.Add("ERROR adding team admin '$($desiredAdmins[$d])' to '$($team.name)': $_")
+                        & $rError "add team admin '$($desiredAdmins[$d])' to '$($team.name)': $_"
+                    }
+                }
+                foreach ($d in $extra) {
+                    $xName = Resolve-AdoMemberDisplay -OrgUrl $OrgUrl -Descriptor $d
+                    try {
+                        Remove-AdoTeamAdmin -OrgUrl $OrgUrl -ProjectId $projectId -TeamId $teamId -IdentityDescriptor $d
+                        & $rDeleted "team admin: $xName <- $($team.name)"
+                    } catch {
+                        $findings.Add("ERROR removing extra team admin '$xName' from '$($team.name)': $_")
+                        & $rError "remove team admin '$xName' from '$($team.name)': $_"
+                    }
+                }
+            } else {
+                foreach ($d in $missing) { $findings.Add("MISSING team admin '$($desiredAdmins[$d])' on '$($team.name)'") }
+                foreach ($d in $extra)   { $findings.Add("DRIFT team '$($team.name)': extra team admin not in config") }
+                if ($Mode -eq 'WhatIf') { & $rWould "correct team admins for: $($team.name) (+$($missing.Count)/-$($extra.Count))" }
+                else                     { & $rDrift "team admins: $($team.name)  (+$($missing.Count)/-$($extra.Count))" }
+            }
+        } catch {
+            $findings.Add("ERROR reconciling team admins for '$($team.name)': $_")
+            & $rError "team admins for '$($team.name)': $_"
+        }
+    }
+
     # ── 6. Structural authority (area node ACLs) ──────────────────────────────
     # Each {key}-Admins group must hold node-admin bits (read/write/delete) on
     # every area path its team governs (Decision-0028 delegated ownership).
-    # Team-administrator assignment is a pending spike — see AzureDevOps.ps1.
     $authorityEntries = @($Resolved.structuralAuthority | Where-Object { $_ })
     if ($authorityEntries.Count -gt 0) {
         Write-Host "`n--- Structural authority ---" -ForegroundColor Cyan

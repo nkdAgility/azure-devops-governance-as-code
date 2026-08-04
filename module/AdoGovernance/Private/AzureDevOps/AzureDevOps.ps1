@@ -941,6 +941,73 @@ function Set-AdoPipelineFolderAce {
     Set-AdoAccessControlEntry -OrgUrl $OrgUrl -NamespaceId $script:PipelineBuildNamespaceId -Body $body
 }
 
+# ─── Team administrators (Identity security namespace) ───────────────────────
+# ADO has no first-class REST API for the Team Administrators role: it is an
+# ACE in the Identity namespace on token '{projectId}\{teamId}'. The UI writes
+# allow=31; the ManageMembership bit (8) is what marks an identity as admin.
+
+$script:IdentityNamespaceId = '5a27515b-ccd7-42c9-84f1-54c998f03866'
+$script:TeamAdminAllowBits  = 31
+$script:TeamAdminMarkerBit  = 8
+
+function Get-AdoTeamAdminSet {
+    <# Returns identityDescriptor -> allow bits for every identity that
+       administers the team (ManageMembership bit set). #>
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)][string]$OrgUrl,
+        [Parameter(Mandatory)][string]$ProjectId,
+        [Parameter(Mandatory)][string]$TeamId
+    )
+    $tok = [Uri]::EscapeDataString("$ProjectId\$TeamId")
+    $set = @{}
+    $r = Invoke-AdoRest -OrgUrl $OrgUrl `
+        -Path "_apis/accesscontrollists/$script:IdentityNamespaceId`?token=$tok"
+    foreach ($list in @($r.value)) {
+        foreach ($p in $list.acesDictionary.PSObject.Properties) {
+            if (([int]$p.Value.allow -band $script:TeamAdminMarkerBit) -ne 0) {
+                $set[$p.Name] = [int]$p.Value.allow
+            }
+        }
+    }
+    return $set
+}
+
+function Add-AdoTeamAdmin {
+    <# Grants the Team Administrator role to an identity. #>
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)][string]$OrgUrl,
+        [Parameter(Mandatory)][string]$ProjectId,
+        [Parameter(Mandatory)][string]$TeamId,
+        [Parameter(Mandatory)][string]$IdentityDescriptor
+    )
+    $body = @{
+        token = "$ProjectId\$TeamId"
+        merge = $true
+        accessControlEntries = @(
+            @{ descriptor = $IdentityDescriptor; allow = $script:TeamAdminAllowBits; deny = 0 }
+        )
+    }
+    Set-AdoAccessControlEntry -OrgUrl $OrgUrl -NamespaceId $script:IdentityNamespaceId -Body $body
+}
+
+function Remove-AdoTeamAdmin {
+    <# Removes an identity's Team Administrator ACE from the team token. #>
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)][string]$OrgUrl,
+        [Parameter(Mandatory)][string]$ProjectId,
+        [Parameter(Mandatory)][string]$TeamId,
+        [Parameter(Mandatory)][string]$IdentityDescriptor
+    )
+    $tok = [Uri]::EscapeDataString("$ProjectId\$TeamId")
+    $d   = [Uri]::EscapeDataString($IdentityDescriptor)
+    Invoke-AdoRest -OrgUrl $OrgUrl `
+        -Path "_apis/accesscontrolentries/$script:IdentityNamespaceId`?token=$tok&descriptors=$d" `
+        -Method 'DELETE' | Out-Null
+}
+
 # ─── Repo ACLs (REST security API, Git repositories namespace) ────────────────
 
 $script:GitRepoNamespaceId = '2e9eb7ed-3c0a-47d4-87c1-0ffdd275fd87'

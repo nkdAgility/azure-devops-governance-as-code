@@ -131,6 +131,7 @@ This is not a provisioning helper that creates missing things and moves on. It i
 ### Teams
 - Every team in `resolved.teams` (non-`future`) exists in ADO.
 - Each team's **area configuration** (`areaConfig`) matches exactly — correct paths, correct `includeSubAreas` flags.
+- Each team's **Team Administrators** match `members/<code>.yaml` `teamAdmins:` exactly — empty/absent list means NO administrators; missing and extra admins are both findings. Entries use the same grammar as role lists (`upn:`/`group:` + `reason`, optional `expires`). Stored as Identity-namespace ACEs (no first-class API); extras are never removed while any desired entry fails to resolve, so a typo cannot strip a team of all admins.
 - Teams that exist in ADO but are absent from the resolved model are orphans.
 
 ### Security groups

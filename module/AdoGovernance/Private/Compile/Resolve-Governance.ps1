@@ -71,6 +71,42 @@ function Add-SideloadEntry {
     $Ctx.Sideloaded[$Key].Add([ordered]@{ path = $Path; includeSubAreas = [bool]$IncludeSubAreas })
 }
 
+function ConvertTo-MemberEntryList {
+    <#
+        .SYNOPSIS
+        Normalizes a members-file entry list. Entries: plain UPN string
+        (legacy) or object with upn:/group: plus reason (access grants must
+        carry a recorded reason) and optional expires — past-dated entries
+        leave the desired state (time-boxed guest access falls out of this).
+    #>
+    [CmdletBinding()]
+    param(
+        $Entries,
+        [Parameter(Mandatory)][datetime]$Today,
+        [Parameter(Mandatory)][string]$Context
+    )
+    $out = [System.Collections.Generic.List[object]]::new()
+    foreach ($entry in @($Entries | Where-Object { $_ })) {
+        if ($entry -is [string]) {
+            $out.Add([ordered]@{ upn = $entry })
+            continue
+        }
+        $norm = if ($entry.upn)   { [ordered]@{ upn = [string]$entry.upn } }
+                elseif ($entry.group) { [ordered]@{ group = [string]$entry.group } }
+                else { throw "${Context}: entry must be a UPN string or an object with upn: or group:." }
+        if ($entry.reason) { $norm.reason = [string]$entry.reason }
+        if ($entry.expires) {
+            $exp = [datetime]$entry.expires
+            if ($exp.Date -lt $Today) { continue }   # expired -> no longer desired
+            $norm.expires = $exp.ToString('yyyy-MM-dd')
+        }
+        $out.Add($norm)
+    }
+    # Comma operator: return the list AS a list — PowerShell would otherwise
+    # enumerate it, collapsing empty to $null and one entry to a bare object.
+    return , $out
+}
+
 function Get-NodeKeyList {
     <# Normalizes a team-code reference value (string or list) to a string array. #>
     [CmdletBinding()]
@@ -340,36 +376,20 @@ function Resolve-Governance {
         $memberSet  = if ($Members.ContainsKey($memberKey)) { $Members[$memberKey] } else { $null }
         $groups = [System.Collections.Generic.List[object]]::new()
         foreach ($spec in @($groupSpecs)) {
-            # Entries: plain UPN string (legacy) or object with upn:/group: plus
-            # reason (access grants must carry a recorded reason) and optional
-            # expires (past-dated entries leave the desired state — time-boxed
-            # guest access falls out of this).
-            $roleMembers = [System.Collections.Generic.List[object]]::new()
-            if ($memberSet -and $memberSet.ContainsKey($spec.role)) {
-                foreach ($entry in @($memberSet[$spec.role] | Where-Object { $_ })) {
-                    if ($entry -is [string]) {
-                        $roleMembers.Add([ordered]@{ upn = $entry })
-                        continue
-                    }
-                    $norm = if ($entry.upn)   { [ordered]@{ upn = [string]$entry.upn } }
-                            elseif ($entry.group) { [ordered]@{ group = [string]$entry.group } }
-                            else { throw "members/$memberKey.yaml role '$($spec.role)': entry must be a UPN string or an object with upn: or group:." }
-                    if ($entry.reason) { $norm.reason = [string]$entry.reason }
-                    if ($entry.expires) {
-                        $exp = [datetime]$entry.expires
-                        if ($exp.Date -lt $today) { continue }   # expired -> no longer desired
-                        $norm.expires = $exp.ToString('yyyy-MM-dd')
-                    }
-                    $roleMembers.Add($norm)
-                }
-            }
+            $entries = if ($memberSet -and $memberSet.ContainsKey($spec.role)) { $memberSet[$spec.role] } else { @() }
             $groups.Add([ordered]@{
                 role    = $spec.role
                 ado     = ($spec.ado -replace '\{key\}', $team.codePath)
-                members = $roleMembers
+                members = (ConvertTo-MemberEntryList -Entries $entries -Today $today -Context "members/$memberKey.yaml role '$($spec.role)'")
             })
         }
         $team.securityGroups = $groups
+
+        # teamAdmins: governs the ADO Team Administrator role on the team
+        # itself — exact-match like group membership: an empty (or absent)
+        # list means the team must have NO administrators.
+        $adminEntries = if ($memberSet -and $memberSet.ContainsKey('teamAdmins')) { $memberSet['teamAdmins'] } else { @() }
+        $team.teamAdmins = (ConvertTo-MemberEntryList -Entries $adminEntries -Today $today -Context "members/$memberKey.yaml teamAdmins")
     }
 
     # Repo ACLs: everyone in the project reads; only the owning team's
