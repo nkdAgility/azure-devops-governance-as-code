@@ -144,7 +144,7 @@ This is not a provisioning helper that creates missing things and moves on. It i
 ### Pipeline folders
 - Every folder in `resolved.pipelineFolders` exists.
 - Each folder's **ACL** matches the resolved `acl` list — wrong permissions and extra ACEs are both findings.
-- A node with `builds: false` in `hierarchy.yaml` has no builds of its own: no pipeline folder or ACL is resolved for it (default: `true`). Applies to teams and products alike.
+- Pipeline folders are **opt-in**: a node (team or product) only gets one when it declares `pipelineFolder: true` in `hierarchy.yaml` — meaning it has builds of its own. No flag → no folder, no ACL.
 
 ---
 

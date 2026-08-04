@@ -13,8 +13,8 @@
 #   - `type: portfolio|structural|delivery` overrides the positional team type
 #     (default: node with child teams -> structural, leaf -> delivery)
 #   - `iterations: sprints|seasons|none` overrides the type's iteration scope
-#   - `builds: false` = the node has no builds of its own, so no pipeline
-#     folder (or folder ACL) is created for it (default: true)
+#   - `pipelineFolder: true` = the node has builds of its own, so a pipeline
+#     folder (+ team ACL) is created for it (default: false - no folder)
 
 products:
 
@@ -22,6 +22,7 @@ products:
   - name: Portal
     dpm: 101
     short: PTL
+    pipelineFolder: true
     sections:
       - platform
       - plugins
@@ -29,50 +30,59 @@ products:
     platform:
       - name: Graphics Pipeline
         short: GPI
+        pipelineFolder: true
       - name: Foundation
         short: FND
+        pipelineFolder: true
         type: delivery      # working team even though Open API nests under it
         iterations: none    # delivery team that does not plan in sprints
       - name: Geometry Library
         short: GLI
-        builds: false     # no builds of its own -> no pipeline folder
       - name: Resource Modeling
         short: RVM
+        pipelineFolder: true
       - name: Stream Modeling
         short: STM
+        pipelineFolder: true
       - name: Connected Framework
         short: CNF
+        pipelineFolder: true
       - name: Rendering Engine and Grids
         short: REG
+        pipelineFolder: true
       - name: Runtime Geometry
         short: RGM
+        pipelineFolder: true
     plugins:
       - { name: Plugin A, short: PLGA, owner: PTL-FND }   # area path here, managed by Foundation
       - { name: Plugin B, short: PLGB, owner: PTL-GPI }   # area path here, managed by Graphics Pipeline
     peng:
-      - { name: Platform Engineering, short: PENG }
+      - { name: Platform Engineering, short: PENG, pipelineFolder: true }
 
   # ── Peer products (sibling of Portal under Odyssey) ──
   - name: Portal DS
     dpm: 102
     short: PDS
+    pipelineFolder: true
 
   - name: Machine Learning for Portal
     dpm: 103
     short: MLP
+    pipelineFolder: true
 
   - name: Open Framework for Portal
     dpm: 104
     short: OFP
+    pipelineFolder: true
 
   - name: Studio
     dpm: 105
     short: STD
+    pipelineFolder: true
 
   - name: Vista
     dpm: ~            # DPM pending confirmation
     short: VIS
-    builds: false     # product without builds -> no pipeline folder
 
   # ── Colors: its own product node, but delivered by the Graphics Pipeline team ──
   - name: Colors
