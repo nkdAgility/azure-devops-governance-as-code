@@ -27,9 +27,8 @@ function Invoke-GovernanceApply {
     $manifest  = $source.Manifest
     $teamIds   = $source.TeamIds      # codePath -> GUID; mutated by reconcile, written back below
     $targetOrg = if ($Org) { $Org } else { $manifest.org }
-    Initialize-AdoAuth -Manifest $manifest | Out-Null
-
-    $orgUrl   = ConvertTo-AdoOrgUrl -Org $targetOrg
+    $orgUrl = ConvertTo-AdoOrgUrl -Org $targetOrg
+    Initialize-AdoAuth -Manifest $manifest -OrgUrl $orgUrl | Out-Null
     $resolved = ConvertFrom-Yaml (Get-Content $ResolvedPath -Raw)
     $mode     = if ($WhatIf) { 'WhatIf' } else { 'Apply' }
 

@@ -22,9 +22,8 @@ function Invoke-GovernanceAudit {
     $manifest  = $source.Manifest
     $teamIds   = $source.TeamIds   # read-only in audit; not written back
     $targetOrg = if ($Org) { $Org } else { $manifest.org }
-    Initialize-AdoAuth -Manifest $manifest | Out-Null
-
-    $orgUrl     = ConvertTo-AdoOrgUrl -Org $targetOrg
+    $orgUrl = ConvertTo-AdoOrgUrl -Org $targetOrg
+    Initialize-AdoAuth -Manifest $manifest -OrgUrl $orgUrl | Out-Null
     $resolved   = ConvertFrom-Yaml (Get-Content $ResolvedPath -Raw)
     $reportPath = Join-Path (Split-Path $ResolvedPath -Parent) 'audit-report.txt'
 

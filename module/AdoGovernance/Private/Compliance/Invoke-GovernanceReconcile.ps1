@@ -1011,7 +1011,7 @@ function Resolve-GovernanceErrorReason {
 
     if ($Finding -match '401|Unauthorized|requires user authentication') {
         if ($Finding -match 'ACL|structural authority') {
-            return "no credential can WRITE security ACLs. The required scope (vso.security_manage) is not selectable in the PAT UI; where full-access PATs are forbidden, run 'az login' - apply retries security writes with your Entra token automatically. Verify with 'doctor'."
+            return "no usable credential can WRITE security ACLs. vso.security_manage is not selectable in the PAT UI; 'az login' enables the Entra route - but if the org rejects Entra tokens (forced sign-out), Conditional Access is blocking this device: use an org-managed device or VPN. Verify with 'doctor'."
         }
         return "the PAT is missing a scope for this resource family - run 'doctor' to identify which."
     }

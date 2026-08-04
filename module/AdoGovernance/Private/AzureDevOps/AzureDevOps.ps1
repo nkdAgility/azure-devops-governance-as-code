@@ -288,6 +288,26 @@ function Resolve-AdoAuthMode {
     throw "No credentials available. Run 'az login' (Entra is the default auth), or configure manifest accessToken with a PAT env var reference for non-interactive use."
 }
 
+function Test-AdoEntraSession {
+    <#
+        .SYNOPSIS
+        Verifies the org actually ACCEPTS the az session's Entra token. A valid
+        token can still be rejected (302 to _signout + X-TFS-ForceSignout) when
+        the org enforces Conditional Access — managed-device or IP policies
+        that apply to Entra sign-ins but not to PATs. Returns $true/$false.
+    #>
+    [CmdletBinding()]
+    param([Parameter(Mandatory)][string]$OrgUrl, [Parameter(Mandatory)][string]$Token)
+    try {
+        $r = Invoke-WebRequest -Uri "$($OrgUrl.TrimEnd('/'))/_apis/connectionData" `
+            -Headers @{ Authorization = "Bearer $Token"; Accept = 'application/json' } `
+            -MaximumRedirection 0 -SkipHttpErrorCheck -ErrorAction Stop
+        return ([int]$r.StatusCode -eq 200 -and ([string]$r.Headers['Content-Type']) -like '*json*')
+    } catch {
+        return $false
+    }
+}
+
 function Initialize-AdoAuth {
     <#
         .SYNOPSIS
@@ -295,18 +315,29 @@ function Initialize-AdoAuth {
         uses the az session (interactive az login, azure/login OIDC, or a
         service principal login) unless the manifest declares auth: pat, or no
         az session exists and a PAT is configured (CI fallback, with warning).
+        The Entra session is validated against the target org before being
+        committed to — orgs with Conditional Access can reject Entra tokens
+        from unmanaged devices while still accepting PATs.
         Sets the module-wide auth mode consumed by Invoke-AdoRest and the CLI.
     #>
     [CmdletBinding()]
-    param([Parameter(Mandatory)]$Manifest)
+    param(
+        [Parameter(Mandatory)]$Manifest,
+        [Parameter(Mandatory)][string]$OrgUrl
+    )
 
     $token = Resolve-AccessToken $Manifest.accessToken
     $entra = Get-AdoEntraToken -Optional
+    if ($entra -and -not (Test-AdoEntraSession -OrgUrl $OrgUrl -Token $entra)) {
+        $who = az account show --query user.name --output tsv 2>$null
+        Write-Host "The org rejected the Entra token for '$who' (forced sign-out). This is usually Conditional Access - a managed-device or IP policy that applies to Entra sign-ins but not PATs. Options: run from a compliant device/VPN, or rely on the PAT." -ForegroundColor Yellow
+        $entra = $null
+    }
     $mode  = Resolve-AdoAuthMode -DeclaredMode ([string]$Manifest.auth) `
         -HasEntraSession ([bool]$entra) -HasPatToken (-not [string]::IsNullOrWhiteSpace($token))
 
     if ($mode -eq 'pat-fallback') {
-        Write-Host "No az login session found - falling back to the configured PAT. Interactive runs should 'az login' (Entra is the default auth)." -ForegroundColor Yellow
+        Write-Host "Falling back to the configured PAT (Entra is the default auth when a usable az session exists)." -ForegroundColor Yellow
         $mode = 'pat'
     }
     if ($mode -eq 'pat') {
@@ -493,7 +524,7 @@ function Test-AdoAuthScope {
                         $verdict = 'ok'
                         $note    = 'PAT lacks it; covered by the Entra fallback (az login)'
                     } else {
-                        $note = "PAT lacks it, and the org also rejected the az login token (HTTP $entraStatus) - is az signed into the right tenant with access to this org? Try: az login --tenant <org tenant>"
+                        $note = "PAT lacks it, and the org also rejected the az login token (HTTP $entraStatus) - wrong tenant (try: az login --tenant <org tenant>) or Conditional Access blocking Entra sign-ins from this device (use an org-managed device or VPN)"
                     }
                 } catch {
                     $note = "PAT lacks it, and the Entra fallback probe failed to reach the org: $_"

@@ -20,9 +20,8 @@ function Test-GovernanceAccess {
     $source    = Import-GovernanceSource -ProgramPath $ProgramPath
     $manifest  = $source.Manifest
     $targetOrg = if ($Org) { $Org } else { $manifest.org }
-    $authMode = Initialize-AdoAuth -Manifest $manifest
-
     $orgUrl      = ConvertTo-AdoOrgUrl -Org $targetOrg
+    $authMode    = Initialize-AdoAuth -Manifest $manifest -OrgUrl $orgUrl
     $projectName = if ($manifest.project -and $manifest.project.name) { $manifest.project.name } else { $manifest.program }
 
     $identity = if ($authMode -eq 'entra') {

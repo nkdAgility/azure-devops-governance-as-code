@@ -17,7 +17,7 @@ function Invoke-GovernancePlan {
 
     $manifest   = (Import-GovernanceSource -ProgramPath $ProgramPath).Manifest
     $targetOrg  = if ($Org) { $Org } else { $manifest.org }
-    $authMode = Initialize-AdoAuth -Manifest $manifest
+    $authMode = Initialize-AdoAuth -Manifest $manifest -OrgUrl (ConvertTo-AdoOrgUrl -Org $targetOrg)
 
     Write-Warning "plan: not yet implemented. Would diff '$ResolvedPath' against org '$targetOrg' (auth: $authMode)."
 }
