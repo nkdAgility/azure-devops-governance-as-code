@@ -593,21 +593,34 @@ function Initialize-AdoTeamDefaults {
         if ($_ -notmatch 'already exists|duplicate|400') { throw }
     }
 
-    # Prefer year-level iteration as the backlog (e.g. \Odyssey\2026) over the root.
-    # The root is too high and ADO later rejects it with TF400497.
-    $backlogId = $iterRoot.identifier
-    try {
-        $yearNode  = Invoke-AdoRest -OrgUrl $OrgUrl `
-            -Path "$Project/_apis/wit/classificationnodes/iterations/$([DateTime]::Today.Year)"
-        if ($yearNode.identifier) { $backlogId = $yearNode.identifier }
-    } catch { <# year node not created yet — fall back to root #> }
-
-    # Set it as the default backlog iteration.
-    # ADO requires a bare GUID string for backlogIteration — sending a nested {id:...}
-    # object is silently accepted (HTTP 200) but the value is NOT updated.
+    # The backlog iteration must be the PROJECT ROOT: teams' rolling windows
+    # span execution years (\...\2026\S3 -> \...\2027\S1) and ADO only shows a
+    # team the iterations inside its backlog-iteration subtree — pinning a year
+    # hides every subscription beyond it. (The TF400497 once seen with the root
+    # was the nested-object PATCH bug below, not the root itself.)
+    # ADO requires a bare GUID string for backlogIteration — sending a nested
+    # {id:...} object is silently accepted (HTTP 200) but the value is NOT updated.
     Invoke-AdoRest -OrgUrl $OrgUrl `
         -Path "$Project/$encodedTeam/_apis/work/teamsettings" `
-        -Method 'PATCH' -Body @{ backlogIteration = $backlogId } | Out-Null
+        -Method 'PATCH' -Body @{ backlogIteration = $iterRoot.identifier } | Out-Null
+}
+
+function Get-AdoTeamBacklogIterationId {
+    <# Returns the GUID of the team's current backlog iteration root. #>
+    [CmdletBinding()]
+    param([string]$OrgUrl, [string]$Project, [string]$Team)
+    $s = Invoke-AdoRest -OrgUrl $OrgUrl `
+        -Path "$Project/$([Uri]::EscapeDataString($Team))/_apis/work/teamsettings"
+    return [string]$s.backlogIteration.id
+}
+
+function Set-AdoTeamBacklogIteration {
+    <# Sets the team's backlog iteration. Bare GUID — see Initialize-AdoTeamDefaults. #>
+    [CmdletBinding()]
+    param([string]$OrgUrl, [string]$Project, [string]$Team, [Parameter(Mandatory)][string]$IterationId)
+    Invoke-AdoRest -OrgUrl $OrgUrl `
+        -Path "$Project/$([Uri]::EscapeDataString($Team))/_apis/work/teamsettings" `
+        -Method 'PATCH' -Body @{ backlogIteration = $IterationId } | Out-Null
 }
 
 function Get-AdoTeamAreaConfig {

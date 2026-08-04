@@ -725,6 +725,29 @@ function Invoke-GovernanceReconcile {
             # Team missing entirely — already flagged in the Teams section.
             if (-not $liveTeamNames.Contains($team.name)) { continue }
 
+            # The team's backlog iteration must be the PROJECT ROOT — rolling
+            # windows span execution years, and ADO hides every subscription
+            # outside the backlog-iteration subtree. A year-pinned root is
+            # drift; apply corrects it.
+            if ($iterRootId) {
+                try {
+                    $currentRoot = Get-AdoTeamBacklogIterationId -OrgUrl $OrgUrl -Project $project -Team $team.name
+                    if ($currentRoot -and $currentRoot -ne $iterRootId) {
+                        if ($doFix) {
+                            Set-AdoTeamBacklogIteration -OrgUrl $OrgUrl -Project $project -Team $team.name -IterationId $iterRootId
+                            & $rFixed "team: $($team.name)  backlog iteration -> project root"
+                        } else {
+                            $findings.Add("DRIFT team '$($team.name)': backlog iteration is not the project root — subscriptions outside its subtree are invisible to the team")
+                            if ($Mode -eq 'WhatIf') { & $rWould "set backlog iteration to project root for team: $($team.name)" }
+                            else                     { & $rDrift "team '$($team.name)': backlog iteration not project root" }
+                        }
+                    }
+                } catch {
+                    $findings.Add("ERROR checking backlog iteration for '$($team.name)': $_")
+                    & $rError "backlog iteration '$($team.name)': $_"
+                }
+            }
+
             # iterationScope comes from the team's type (portfolio/structural ->
             # seasons, delivery -> sprints) or a per-node override; kind is the
             # fallback for resolved models built before team types existed.

@@ -4,11 +4,14 @@
 #
 # Node kinds:
 #   team (delivery/structural/portfolio)  — real ADO team created
-#   sideload   — area path only, added to the sideloading team(s)' area config
-#                (`sideload: <code>` or a list; `owner:` is a deprecated alias)
+#   owned      — `owner: <code>`: no team of its own; the owning team GOVERNS
+#                the path (structural authority for its -Admins group) and its
+#                board includes it
+#   sideload   — `sideload: <code>` (or a list): area path ONLY — added to the
+#                listed teams' boards, NO authority granted
 #   area       — `team: none`: governed structure attached to nothing
-# A node with `sideload:` AND an explicit `type:` is BOTH: its own team, and
-# its path is additionally sideloaded into the listed teams' area configs.
+# A node with `owner:`/`sideload:` AND an explicit `type:` is BOTH: its own
+# team, plus the owner/sideload effects for the listed teams.
 
 # Team types drive planning behaviour: area sub-tree visibility, backlog levels,
 # and iteration scope. Position in the tree supplies the default type; nodes in
@@ -55,8 +58,9 @@ function Get-TeamTypeDefs {
 }
 
 function Add-OwnedEntry {
-    <# Records that a node's area path is managed by another team (owner back-reference).
-       Keyed by the owner's product-qualified code (e.g. PTL-FND), not the bare leaf. #>
+    <# Records that a node's area path is GOVERNED by another team: the path
+       joins the owner's board AND its -Admins group gets structural authority.
+       Keyed by the owner's product-qualified code (e.g. PTL-FND). #>
     [CmdletBinding()]
     param(
         [Parameter(Mandatory)][hashtable]$Ctx,
@@ -70,13 +74,27 @@ function Add-OwnedEntry {
     $Ctx.Owned[$Key].Add([ordered]@{ path = $Path; includeSubAreas = [bool]$IncludeSubAreas })
 }
 
-function Get-NodeSideloadKeys {
-    <# The teams that sideload a node's area path: `sideload:` as a string or
-       list, with `owner:` kept as a deprecated alias. Empty array when none. #>
+function Add-SideloadEntry {
+    <# Records that a node's area path is SIDELOADED onto a team's board —
+       area path visibility ONLY, no structural authority. #>
     [CmdletBinding()]
-    param($Node)
-    $raw = if ($null -ne $Node.sideload) { $Node.sideload } else { $Node.owner }
-    return @(@($raw) | Where-Object { $_ } | ForEach-Object { [string]$_ })
+    param(
+        [Parameter(Mandatory)][hashtable]$Ctx,
+        [Parameter(Mandatory)][string]$Key,
+        [Parameter(Mandatory)][string]$Path,
+        [bool]$IncludeSubAreas
+    )
+    if (-not $Ctx.Sideloaded.ContainsKey($Key)) {
+        $Ctx.Sideloaded[$Key] = [System.Collections.Generic.List[object]]::new()
+    }
+    $Ctx.Sideloaded[$Key].Add([ordered]@{ path = $Path; includeSubAreas = [bool]$IncludeSubAreas })
+}
+
+function Get-NodeKeyList {
+    <# Normalizes a team-code reference value (string or list) to a string array. #>
+    [CmdletBinding()]
+    param($Value)
+    return @(@($Value) | Where-Object { $_ } | ForEach-Object { [string]$_ })
 }
 
 function Add-NodeRepos {
@@ -134,27 +152,38 @@ function Add-TeamNode {
     $children       = @($Node.teams | Where-Object { $null -ne $_ })
     $hasChildren    = $children.Count -gt 0
 
-    $sideloaders    = @(Get-NodeSideloadKeys $Node)
+    $owners         = @(Get-NodeKeyList $Node.owner)
+    $sideloaders    = @(Get-NodeKeyList $Node.sideload)
     $isTeamless     = ("$($Node.team)" -eq 'none')
-    # sideload WITHOUT an explicit type = area only; WITH a type = team too.
-    $isSideloadOnly = (-not $isTeamless) -and $sideloaders.Count -gt 0 -and -not $Node.type
+    # owner/sideload WITHOUT an explicit type = area only; WITH a type = team too.
+    $isAreaOnly     = (-not $isTeamless) -and ($owners.Count + $sideloaders.Count) -gt 0 -and -not $Node.type
 
-    $kind = if ($isTeamless) { 'area' } elseif ($isSideloadOnly) { 'sideload' } else { 'team' }
+    $kind = if ($isTeamless) { 'area' }
+            elseif ($isAreaOnly -and $owners.Count -gt 0) { 'owned' }
+            elseif ($isAreaOnly) { 'sideload' }
+            else { 'team' }
     $area = [ordered]@{ path = $path; kind = $kind }
     if ($Node.short) { $area.short = $Node.short; $area.code = $codePath }
+    if ($owners.Count -gt 0)      { $area.owner    = $owners }
     if ($sideloaders.Count -gt 0) { $area.sideload = $sideloaders }
     $Ctx.AreaPaths.Add($area)
 
+    # Repo ownership: the node's own team, else its (first) owner, else its
+    # first sideloader.
+    $repoOwner = if (-not $isTeamless -and -not $isAreaOnly) { $codePath }
+                 elseif ($owners.Count -gt 0) { $owners[0] }
+                 elseif ($sideloaders.Count -gt 0) { $sideloaders[0] }
+                 else { $null }
+    $nodeCode  = if ($Node.short) { $codePath } else { $null }
+
     if ($isTeamless) {
-        # Governed structure attached to nothing — no team, no sideloader.
+        # Governed structure attached to nothing — no team, no owner.
         Add-NodeRepos -Ctx $Ctx -Node $Node -Path $path -OwnerKey $null -NodeCode $null
     }
-    elseif ($isSideloadOnly) {
-        foreach ($s in $sideloaders) {
-            Add-OwnedEntry -Ctx $Ctx -Key $s -Path $path -IncludeSubAreas $hasChildren
-        }
-        $nodeCode = if ($Node.short) { $codePath } else { $null }
-        Add-NodeRepos -Ctx $Ctx -Node $Node -Path $path -OwnerKey $sideloaders[0] -NodeCode $nodeCode
+    elseif ($isAreaOnly) {
+        foreach ($o in $owners)      { Add-OwnedEntry    -Ctx $Ctx -Key $o -Path $path -IncludeSubAreas $hasChildren }
+        foreach ($s in $sideloaders) { Add-SideloadEntry -Ctx $Ctx -Key $s -Path $path -IncludeSubAreas $hasChildren }
+        Add-NodeRepos -Ctx $Ctx -Node $Node -Path $path -OwnerKey $repoOwner -NodeCode $nodeCode
     }
     else {
         $type = if ($Node.type) { [string]$Node.type }
@@ -185,11 +214,10 @@ function Add-TeamNode {
             backlogs        = @($typeDef.backlogs)
             pipelineFolder  = $folder
         })
-        # Team + sideload combo: the team exists AND its path is also added to
-        # the listed consumers' area configs.
-        foreach ($s in $sideloaders) {
-            Add-OwnedEntry -Ctx $Ctx -Key $s -Path $path -IncludeSubAreas $hasChildren
-        }
+        # Team + owner/sideload combo: the team exists AND the listed teams
+        # get the path (owners with authority, sideloaders board-only).
+        foreach ($o in $owners)      { Add-OwnedEntry    -Ctx $Ctx -Key $o -Path $path -IncludeSubAreas $hasChildren }
+        foreach ($s in $sideloaders) { Add-SideloadEntry -Ctx $Ctx -Key $s -Path $path -IncludeSubAreas $hasChildren }
         Add-NodeRepos -Ctx $Ctx -Node $Node -Path $path -OwnerKey $codePath -NodeCode $codePath
     }
 
@@ -222,7 +250,8 @@ function Resolve-Governance {
         Teams           = [System.Collections.Generic.List[object]]::new()
         Repos           = [System.Collections.Generic.List[object]]::new()
         PipelineFolders = [System.Collections.Generic.List[object]]::new()
-        Owned           = @{}
+        Owned           = @{}   # code -> paths GOVERNED by that team (board + authority)
+        Sideloaded      = @{}   # code -> paths SIDELOADED onto that team (board only)
         TypeDefs        = $typeDefs
     }
 
@@ -247,27 +276,36 @@ function Resolve-Governance {
     foreach ($product in @($Source.products)) {
         $productPath = "$root\$($product.name)"
 
-        $sideloaders    = @(Get-NodeSideloadKeys $product)
+        $owners         = @(Get-NodeKeyList $product.owner)
+        $sideloaders    = @(Get-NodeKeyList $product.sideload)
         $isTeamless     = ("$($product.team)" -eq 'none')
-        # sideload WITHOUT an explicit type = area only; WITH a type = team too.
-        $isSideloadOnly = (-not $isTeamless) -and $sideloaders.Count -gt 0 -and -not $product.type
+        # owner/sideload WITHOUT an explicit type = area only; WITH a type = team too.
+        $isAreaOnly     = (-not $isTeamless) -and ($owners.Count + $sideloaders.Count) -gt 0 -and -not $product.type
 
-        $kind = if ($isTeamless) { 'area' } elseif ($isSideloadOnly) { 'sideload' } else { 'product' }
+        $kind = if ($isTeamless) { 'area' }
+                elseif ($isAreaOnly -and $owners.Count -gt 0) { 'owned' }
+                elseif ($isAreaOnly) { 'sideload' }
+                else { 'product' }
         $area = [ordered]@{ path = $productPath; kind = $kind }
         if ($product.short) { $area.short = $product.short; $area.code = $product.short }
         if ($null -ne $product.dpm) { $area.dpm = $product.dpm }
         if ($product.scope) { $area.scope = $product.scope }
+        if ($owners.Count -gt 0)      { $area.owner    = $owners }
         if ($sideloaders.Count -gt 0) { $area.sideload = $sideloaders }
         $ctx.AreaPaths.Add($area)
+
+        $productRepoOwner = if (-not $isTeamless -and -not $isAreaOnly) { $product.short }
+                            elseif ($owners.Count -gt 0) { $owners[0] }
+                            elseif ($sideloaders.Count -gt 0) { $sideloaders[0] }
+                            else { $null }
 
         if ($isTeamless) {
             Add-NodeRepos -Ctx $ctx -Node $product -Path $productPath -OwnerKey $null -NodeCode $null
         }
-        elseif ($isSideloadOnly) {
-            foreach ($s in $sideloaders) {
-                Add-OwnedEntry -Ctx $ctx -Key $s -Path $productPath -IncludeSubAreas $true
-            }
-            Add-NodeRepos -Ctx $ctx -Node $product -Path $productPath -OwnerKey $sideloaders[0] -NodeCode $product.short
+        elseif ($isAreaOnly) {
+            foreach ($o in $owners)      { Add-OwnedEntry    -Ctx $ctx -Key $o -Path $productPath -IncludeSubAreas $true }
+            foreach ($s in $sideloaders) { Add-SideloadEntry -Ctx $ctx -Key $s -Path $productPath -IncludeSubAreas $true }
+            Add-NodeRepos -Ctx $ctx -Node $product -Path $productPath -OwnerKey $productRepoOwner -NodeCode $product.short
         }
         else {
             # Products opt in the same way teams do: `pipelineFolder: true`
@@ -288,9 +326,8 @@ function Resolve-Governance {
             }
             if ($product.scope) { $teamObj.scope = $product.scope }
             $ctx.Teams.Add($teamObj)
-            foreach ($s in $sideloaders) {
-                Add-OwnedEntry -Ctx $ctx -Key $s -Path $productPath -IncludeSubAreas $true
-            }
+            foreach ($o in $owners)      { Add-OwnedEntry    -Ctx $ctx -Key $o -Path $productPath -IncludeSubAreas $true }
+            foreach ($s in $sideloaders) { Add-SideloadEntry -Ctx $ctx -Key $s -Path $productPath -IncludeSubAreas $true }
             Add-NodeRepos -Ctx $ctx -Node $product -Path $productPath -OwnerKey $product.short -NodeCode $product.short
         }
 
