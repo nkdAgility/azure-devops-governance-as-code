@@ -138,8 +138,16 @@ This is not a provisioning helper that creates missing things and moves on. It i
 - Each group's **membership** matches its `members` list exactly — missing members and extra members are both findings.
 
 ### Repos
-- Every repo in `resolved.repos` exists.
+- Every repo in `resolved.repos` exists. Repos are declared per node in `hierarchy.yaml` (`repos:` list); a node can own several.
 - Repos not in the resolved model are orphans.
+- Each repo's **ACL** matches the resolved model: everyone in the project reads (`Project Valid Users`), only the owning team's contributor group writes, and `innerOSS: true` additionally grants everyone branch creation + PR contribution (fork/PR flow, no direct push).
+- A repo's owner is the node's own team, or its first `sideload:` team when the node has no team.
+
+### Hierarchy node kinds
+- **team** (`portfolio`/`structural`/`delivery`) — real ADO team.
+- **sideload** — `sideload: <code>` (or a list): area path only, added to every listed team's area config. `owner:` is a deprecated alias. A node with `sideload:` **and** an explicit `type:` is both: its own team, and additionally sideloaded into the listed teams.
+- **area** — `team: none`: governed structure attached to nothing.
+- Product `sections` are free-form: `- name: <display name>` / `items: [...]` — any number of bands, any characters in names.
 
 ### Pipeline folders
 - Every folder in `resolved.pipelineFolders` exists.

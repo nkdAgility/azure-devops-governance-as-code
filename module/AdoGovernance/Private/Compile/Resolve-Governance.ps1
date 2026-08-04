@@ -1,12 +1,14 @@
 # Compile stage — projects the authored hierarchy into the resolved desired state.
 # The hierarchy is the product; teams, area paths, repos, pipelines, and permissions
 # are all derived here.
-
-$script:BandDisplayName = @{
-    platform = 'Platform'
-    plugins  = 'Plugins'
-    peng     = 'Platform Engineering'
-}
+#
+# Node kinds:
+#   team (delivery/structural/portfolio)  — real ADO team created
+#   sideload   — area path only, added to the sideloading team(s)' area config
+#                (`sideload: <code>` or a list; `owner:` is a deprecated alias)
+#   area       — `team: none`: governed structure attached to nothing
+# A node with `sideload:` AND an explicit `type:` is BOTH: its own team, and
+# its path is additionally sideloaded into the listed teams' area configs.
 
 # Team types drive planning behaviour: area sub-tree visibility, backlog levels,
 # and iteration scope. Position in the tree supplies the default type; nodes in
@@ -68,6 +70,43 @@ function Add-OwnedEntry {
     $Ctx.Owned[$Key].Add([ordered]@{ path = $Path; includeSubAreas = [bool]$IncludeSubAreas })
 }
 
+function Get-NodeSideloadKeys {
+    <# The teams that sideload a node's area path: `sideload:` as a string or
+       list, with `owner:` kept as a deprecated alias. Empty array when none. #>
+    [CmdletBinding()]
+    param($Node)
+    $raw = if ($null -ne $Node.sideload) { $Node.sideload } else { $Node.owner }
+    return @(@($raw) | Where-Object { $_ } | ForEach-Object { [string]$_ })
+}
+
+function Add-NodeRepos {
+    <# Collects a node's declared repos. Each repo is owned by the node's own
+       team, or by its first sideloader when the node has no team. ACLs
+       (everyone reads, owner writes, innerOSS opens branch/PR contribution to
+       everyone) are attached later, once security groups exist. #>
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)][hashtable]$Ctx,
+        [Parameter(Mandatory)]$Node,
+        [Parameter(Mandatory)][string]$Path,
+        [AllowNull()][AllowEmptyString()][string]$OwnerKey
+    )
+    foreach ($r in @($Node.repos | Where-Object { $_ })) {
+        if (-not $r.name) {
+            throw "hierarchy.yaml: node '$($Node.name)' has a repo entry without a name."
+        }
+        if (-not $OwnerKey) {
+            throw "hierarchy.yaml: node '$($Node.name)' declares repos but has no owning team - give it its own team or a sideload:."
+        }
+        $Ctx.Repos.Add([ordered]@{
+            name     = [string]$r.name
+            areaPath = $Path
+            owner    = $OwnerKey
+            innerOSS = [bool]$r.innerOSS
+        })
+    }
+}
+
 function Add-TeamNode {
     <# Recursively projects a team node (and its nested sub-teams) under a band.
        Only first-level teams get a pipeline folder; sub-teams share the parent's. #>
@@ -89,12 +128,26 @@ function Add-TeamNode {
     $children       = @($Node.teams | Where-Object { $null -ne $_ })
     $hasChildren    = $children.Count -gt 0
 
-    $area = [ordered]@{ path = $path; kind = 'team' }
+    $sideloaders    = @(Get-NodeSideloadKeys $Node)
+    $isTeamless     = ("$($Node.team)" -eq 'none')
+    # sideload WITHOUT an explicit type = area only; WITH a type = team too.
+    $isSideloadOnly = (-not $isTeamless) -and $sideloaders.Count -gt 0 -and -not $Node.type
+
+    $kind = if ($isTeamless) { 'area' } elseif ($isSideloadOnly) { 'sideload' } else { 'team' }
+    $area = [ordered]@{ path = $path; kind = $kind }
     if ($Node.short) { $area.short = $Node.short; $area.code = $codePath }
+    if ($sideloaders.Count -gt 0) { $area.sideload = $sideloaders }
     $Ctx.AreaPaths.Add($area)
 
-    if ($Node.owner) {
-        Add-OwnedEntry -Ctx $Ctx -Key $Node.owner -Path $path -IncludeSubAreas $true
+    if ($isTeamless) {
+        # Governed structure attached to nothing — no team, no sideloader.
+        Add-NodeRepos -Ctx $Ctx -Node $Node -Path $path -OwnerKey $null
+    }
+    elseif ($isSideloadOnly) {
+        foreach ($s in $sideloaders) {
+            Add-OwnedEntry -Ctx $Ctx -Key $s -Path $path -IncludeSubAreas $hasChildren
+        }
+        Add-NodeRepos -Ctx $Ctx -Node $Node -Path $path -OwnerKey $sideloaders[0]
     }
     else {
         $type = if ($Node.type) { [string]$Node.type }
@@ -125,6 +178,12 @@ function Add-TeamNode {
             backlogs        = @($typeDef.backlogs)
             pipelineFolder  = $folder
         })
+        # Team + sideload combo: the team exists AND its path is also added to
+        # the listed consumers' area configs.
+        foreach ($s in $sideloaders) {
+            Add-OwnedEntry -Ctx $Ctx -Key $s -Path $path -IncludeSubAreas $hasChildren
+        }
+        Add-NodeRepos -Ctx $Ctx -Node $Node -Path $path -OwnerKey $codePath
     }
 
     foreach ($child in $children) {
@@ -181,14 +240,27 @@ function Resolve-Governance {
     foreach ($product in @($Source.products)) {
         $productPath = "$root\$($product.name)"
 
-        $area = [ordered]@{ path = $productPath; kind = 'product' }
+        $sideloaders    = @(Get-NodeSideloadKeys $product)
+        $isTeamless     = ("$($product.team)" -eq 'none')
+        # sideload WITHOUT an explicit type = area only; WITH a type = team too.
+        $isSideloadOnly = (-not $isTeamless) -and $sideloaders.Count -gt 0 -and -not $product.type
+
+        $kind = if ($isTeamless) { 'area' } elseif ($isSideloadOnly) { 'sideload' } else { 'product' }
+        $area = [ordered]@{ path = $productPath; kind = $kind }
         if ($product.short) { $area.short = $product.short; $area.code = $product.short }
         if ($null -ne $product.dpm) { $area.dpm = $product.dpm }
         if ($product.scope) { $area.scope = $product.scope }
+        if ($sideloaders.Count -gt 0) { $area.sideload = $sideloaders }
         $ctx.AreaPaths.Add($area)
 
-        if ($product.owner) {
-            Add-OwnedEntry -Ctx $ctx -Key $product.owner -Path $productPath -IncludeSubAreas $true
+        if ($isTeamless) {
+            Add-NodeRepos -Ctx $ctx -Node $product -Path $productPath -OwnerKey $null
+        }
+        elseif ($isSideloadOnly) {
+            foreach ($s in $sideloaders) {
+                Add-OwnedEntry -Ctx $ctx -Key $s -Path $productPath -IncludeSubAreas $true
+            }
+            Add-NodeRepos -Ctx $ctx -Node $product -Path $productPath -OwnerKey $sideloaders[0]
         }
         else {
             # Products opt in the same way teams do: `pipelineFolder: true`
@@ -209,39 +281,28 @@ function Resolve-Governance {
             }
             if ($product.scope) { $teamObj.scope = $product.scope }
             $ctx.Teams.Add($teamObj)
+            foreach ($s in $sideloaders) {
+                Add-OwnedEntry -Ctx $ctx -Key $s -Path $productPath -IncludeSubAreas $true
+            }
+            Add-NodeRepos -Ctx $ctx -Node $product -Path $productPath -OwnerKey $product.short
         }
 
+        # Free-form bands: each section is { name: <display name>, items: [...] }.
+        # Display names may contain any characters (parentheses etc.). Items are
+        # teams, sideload: areas, or team: none placeholders — all band-agnostic.
         foreach ($section in @($product.sections | Where-Object { $null -ne $_ })) {
-            $bandName = $script:BandDisplayName[$section]
-            if (-not $bandName) { continue }
-
-            $bandPath = "$productPath\$bandName"
-            $ctx.AreaPaths.Add([ordered]@{ path = $bandPath; kind = 'band'; section = $section })
-
-            $items = @($product[$section]) | Where-Object { $null -ne $_ }
-            if ($items.Count -eq 0) { continue }
-
-            if ($section -eq 'plugins') {
-                foreach ($plugin in $items) {
-                    $pluginPath = "$bandPath\$($plugin.name)"
-
-                    $pArea = [ordered]@{ path = $pluginPath; kind = 'entity' }
-                    if ($plugin.short) { $pArea.short = $plugin.short; $pArea.code = "$($product.short)-$($plugin.short)" }
-                    if ($plugin.owner) { $pArea.owner = $plugin.owner }
-                    $ctx.AreaPaths.Add($pArea)
-
-                    $repoName = "$($product.short)-$($plugin.short)-$(ConvertTo-Kebab $plugin.name)"
-                    $ctx.Repos.Add([ordered]@{ name = $repoName; areaPath = $pluginPath; owner = $plugin.owner })
-
-                    if ($plugin.owner) {
-                        Add-OwnedEntry -Ctx $ctx -Key $plugin.owner -Path $pluginPath -IncludeSubAreas $false
-                    }
-                }
+            if ($section -is [string]) {
+                throw "hierarchy.yaml: product '$($product.name)' uses the legacy section keyword '$section'. Sections are now objects: - name: <display name> / items: [...]."
             }
-            else {
-                foreach ($node in $items) {
-                    Add-TeamNode -Node $node -ParentPath $bandPath -ParentTeamName $product.name -QualifiedParentName $product.name -ParentCodePath $product.short -IsFirstLevel $true -ProgramRoot $root -Ctx $ctx
-                }
+            $bandName = [string]$section.name
+            if (-not $bandName) {
+                throw "hierarchy.yaml: product '$($product.name)' has a section without a name."
+            }
+            $bandPath = "$productPath\$bandName"
+            $ctx.AreaPaths.Add([ordered]@{ path = $bandPath; kind = 'band' })
+
+            foreach ($node in @($section.items | Where-Object { $null -ne $_ })) {
+                Add-TeamNode -Node $node -ParentPath $bandPath -ParentTeamName $product.name -QualifiedParentName $product.name -ParentCodePath $product.short -IsFirstLevel $true -ProgramRoot $root -Ctx $ctx
             }
         }
     }
@@ -299,6 +360,31 @@ function Resolve-Governance {
             })
         }
         $team.securityGroups = $groups
+    }
+
+    # Repo ACLs: everyone in the project reads; only the owning team's
+    # contributor group writes; innerOSS additionally opens branch creation and
+    # PR contribution to everyone (fork/PR flow without direct push).
+    $teamByCode = @{}
+    foreach ($team in $ctx.Teams) {
+        if ($team.codePath) { $teamByCode[$team.codePath] = $team }
+    }
+    foreach ($repo in $ctx.Repos) {
+        $ownerTeam = $teamByCode[$repo.owner]
+        if (-not $ownerTeam) {
+            throw "hierarchy.yaml: repo '$($repo.name)' is owned by '$($repo.owner)', which does not resolve to any team."
+        }
+        $writeGroup = @($ownerTeam.securityGroups | Where-Object { $_.role -eq 'contributor' })
+        if ($writeGroup.Count -eq 0) { $writeGroup = @($ownerTeam.securityGroups | Where-Object { $_.role -eq 'admin' }) }
+        $acl = [System.Collections.Generic.List[object]]::new()
+        $acl.Add([ordered]@{ principal = 'project-valid-users'; permission = 'read' })
+        if ($writeGroup.Count -gt 0) {
+            $acl.Add([ordered]@{ principal = $writeGroup[0].ado; permission = 'write' })
+        }
+        if ($repo.innerOSS) {
+            $acl.Add([ordered]@{ principal = 'project-valid-users'; permission = 'innersource' })
+        }
+        $repo.acl = $acl
     }
 
     # Pipeline folders: the folder structure (mirroring the area path, truncated

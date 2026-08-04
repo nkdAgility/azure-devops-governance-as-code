@@ -1,15 +1,21 @@
 # programs/odyssey/hierarchy.yaml — THE authored hierarchy (structure only).
 # Program identity + connection live in manifest.yaml.
 #
-# Grammar (fixed):  Odyssey \ {product-dpm} \ [platform|plugins|peng] \ {team}*
+# Grammar:  Odyssey \ {product-dpm} \ {band}* \ {node}*
 #   - position in the tree IS the type (product / band / team)
 #   - a product is a product because it has a `dpm`
-#   - `sections` explicitly registers which bands exist (even when empty)
-#   - `owner: <code>` = area path here, managed by that team's config, no new team
-#   - `short` is the LEAF code; a node's global key is the product-qualified chain
-#     of shorts (Portal's Geological Interpretation `GLI` -> `PTL-GLI`). Leaf shorts
-#     may repeat across products; the qualified code is unique across the program.
-#   - `owner` references use that qualified code (e.g. `PTL-FND`, `PTL-GPI`).
+#   - `sections` registers the bands: - name: <display name> / items: [...]
+#     (display names are free-form — parentheses etc. are fine)
+#   - `sideload: <code>` (or a list) = area path here, added to the sideloading
+#     team(s)' area config, no team of its own. `owner:` is a deprecated alias.
+#     With an explicit `type:` the node is BOTH its own team AND sideloaded.
+#   - `team: none` = governed structure attached to nothing (no team, no owner)
+#   - `repos:` = repos owned by the node's team (or its first sideloader):
+#     everyone reads, the owning team writes; `innerOSS: true` additionally
+#     opens branch creation + PR contribution to everyone (fork/PR flow)
+#   - `short` is the LEAF code; a node's global key is the product-qualified
+#     chain of shorts (Portal's `GLI` -> `PTL-GLI`). Leaf shorts may repeat
+#     across products; the qualified code is unique across the program.
 #   - `type: portfolio|structural|delivery` overrides the positional team type
 #     (default: node with child teams -> structural, leaf -> delivery)
 #   - `iterations: sprints|seasons|none` overrides the type's iteration scope
@@ -24,40 +30,53 @@ products:
     short: PTL
     pipelineFolder: true
     sections:
-      - platform
-      - plugins
-      - peng
-    platform:
-      - name: Graphics Pipeline
-        short: GPI
-        pipelineFolder: true
-      - name: Foundation
-        short: FND
-        pipelineFolder: true
-        type: delivery      # working team even though Open API nests under it
-        iterations: none    # delivery team that does not plan in sprints
-      - name: Geometry Library
-        short: GLI
-      - name: Resource Modeling
-        short: RVM
-        pipelineFolder: true
-      - name: Stream Modeling
-        short: STM
-        pipelineFolder: true
-      - name: Connected Framework
-        short: CNF
-        pipelineFolder: true
-      - name: Rendering Engine and Grids
-        short: REG
-        pipelineFolder: true
-      - name: Runtime Geometry
-        short: RGM
-        pipelineFolder: true
-    plugins:
-      - { name: Plugin A, short: PLGA, owner: PTL-FND }   # area path here, managed by Foundation
-      - { name: Plugin B, short: PLGB, owner: PTL-GPI }   # area path here, managed by Graphics Pipeline
-    peng:
-      - { name: Platform Engineering, short: PENG, pipelineFolder: true }
+      - name: Platform
+        items:
+          - name: Graphics Pipeline
+            short: GPI
+            pipelineFolder: true
+          - name: Foundation
+            short: FND
+            pipelineFolder: true
+            type: delivery      # working team even though Open API nests under it
+            iterations: none    # delivery team that does not plan in sprints
+          - name: Geometry Library
+            short: GLI
+          - name: Resource Modeling
+            short: RVM
+            pipelineFolder: true
+          - name: Stream Modeling
+            short: STM
+            pipelineFolder: true
+            type: delivery          # its own team...
+            sideload: PTL-GPI       # ...AND sideloaded into GPI's board
+          - name: Connected Framework
+            short: CNF
+            pipelineFolder: true
+          - name: Rendering Engine and Grids
+            short: REG
+            pipelineFolder: true
+          - name: Runtime Geometry
+            short: RGM
+            pipelineFolder: true
+      - name: Plugins
+        items:
+          - name: Plugin A
+            short: PLGA
+            sideload: PTL-FND       # area managed by Foundation, no team
+            repos:
+              - name: PTL-PLGA-plugin-a
+          - name: Plugin B
+            short: PLGB
+            sideload: [PTL-GPI, PTL-FND]   # two consumers; GPI (first) owns the repos
+            repos:
+              - name: PTL-PLGB-plugin-b
+                innerOSS: true             # everyone can branch + PR
+          - name: Sandbox
+            team: none              # governed structure attached to nothing
+      - name: Platform Engineering
+        items:
+          - { name: Platform Engineering, short: PENG, pipelineFolder: true }
 
   # ── Peer products (sibling of Portal under Odyssey) ──
   - name: Portal DS
@@ -88,7 +107,7 @@ products:
   - name: Colors
     dpm: 106
     short: CLR
-    owner: PTL-GPI     # no separate Colors team; GPI's area config picks up \Odyssey\Colors
+    owner: PTL-GPI     # deprecated alias of sideload: — still supported
 
   # ── Future: not in current migration scope ──
   - { name: Trace Log,  dpm: 107, short: TLG, scope: future }

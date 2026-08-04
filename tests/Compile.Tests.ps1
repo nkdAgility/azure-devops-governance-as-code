@@ -89,8 +89,52 @@ Describe 'Compile stage' {
         $fnd.areaConfig.path | Should -Contain '\Odyssey\Portal\Plugins\Plugin A'
     }
 
-    It 'derives a repo for each plugin' {
+    It 'declares repos on nodes and resolves them' {
         ($script:resolved.repos | Where-Object name -eq 'PTL-PLGA-plugin-a') | Should -Not -BeNullOrEmpty
+    }
+
+    It 'sideloads a multi-consumer area into every listed team' {
+        $gpi = $script:resolved.teams | Where-Object short -eq 'GPI'
+        $fnd = $script:resolved.teams | Where-Object short -eq 'FND'
+        $gpi.areaConfig.path | Should -Contain '\Odyssey\Portal\Plugins\Plugin B'
+        $fnd.areaConfig.path | Should -Contain '\Odyssey\Portal\Plugins\Plugin B'
+    }
+
+    It 'supports a node that is both a team and sideloaded elsewhere' {
+        ($script:resolved.teams | Where-Object short -eq 'STM') | Should -Not -BeNullOrEmpty
+        $gpi = $script:resolved.teams | Where-Object short -eq 'GPI'
+        $gpi.areaConfig.path | Should -Contain '\Odyssey\Portal\Platform\Stream Modeling'
+    }
+
+    It 'creates a governed team-less area for team: none nodes' {
+        $sandbox = $script:resolved.areaPaths | Where-Object path -eq '\Odyssey\Portal\Plugins\Sandbox'
+        $sandbox | Should -Not -BeNullOrEmpty
+        $sandbox.kind | Should -Be 'area'
+        ($script:resolved.teams | Where-Object name -like '*Sandbox*') | Should -BeNullOrEmpty
+    }
+
+    It 'stamps repo ownership and ACLs: everyone reads, the owning team writes' {
+        $repo = $script:resolved.repos | Where-Object name -eq 'PTL-PLGA-plugin-a'
+        $repo.owner | Should -Be 'PTL-FND'
+        ($repo.acl | Where-Object permission -eq 'read').principal  | Should -Be 'project-valid-users'
+        ($repo.acl | Where-Object permission -eq 'write').principal | Should -Be 'PTL-FND-Contributors'
+    }
+
+    It 'innerOSS repos additionally open branch/PR contribution to everyone' {
+        $repo = $script:resolved.repos | Where-Object name -eq 'PTL-PLGB-plugin-b'
+        $repo.owner | Should -Be 'PTL-GPI'   # first sideloader owns the repos
+        ($repo.acl | Where-Object permission -eq 'innersource').principal | Should -Be 'project-valid-users'
+        ($repo.acl | Where-Object permission -eq 'write').principal | Should -Be 'PTL-GPI-Contributors'
+    }
+
+    It 'rejects the legacy string section grammar with a clear error' {
+        InModuleScope AdoGovernance {
+            { Resolve-Governance -Manifest @{ program = 'Demo'; org = 'demo' } `
+                -Source @{ products = @(@{ name = 'P'; short = 'P'; dpm = 1; sections = @('platform'); platform = @() }) } `
+                -Access @{ teamGroups = @(); containerGroups = @(); roles = @{};
+                           stakeholders = @{ accessLevel = 'stakeholder'; ado = 'D-S'; scope = 'org' } } `
+                -SourceHash 'x' } | Should -Throw '*legacy section keyword*'
+        }
     }
 
     It 'creates a pipeline folder mirroring the area path, with the team ACL' {
@@ -271,6 +315,19 @@ Describe 'Pipeline folder ACL resolution' {
 
     It 'throws on an unknown permission string' {
         { InModuleScope AdoGovernance { ConvertTo-PipelinePermissionBit -Permission 'unknown' } } |
+            Should -Throw
+    }
+
+    It 'maps repo permissions to Git-namespace bits' {
+        InModuleScope AdoGovernance {
+            ConvertTo-RepoPermissionBit -Permission 'read'        | Should -Be 2
+            ConvertTo-RepoPermissionBit -Permission 'write'       | Should -Be 16438
+            ConvertTo-RepoPermissionBit -Permission 'innersource' | Should -Be 16402
+        }
+    }
+
+    It 'throws on an unknown repo permission' {
+        { InModuleScope AdoGovernance { ConvertTo-RepoPermissionBit -Permission 'admin' } } |
             Should -Throw
     }
 

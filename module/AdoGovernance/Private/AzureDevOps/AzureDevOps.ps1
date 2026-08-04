@@ -928,6 +928,82 @@ function Set-AdoPipelineFolderAce {
     Set-AdoAccessControlEntry -OrgUrl $OrgUrl -NamespaceId $script:PipelineBuildNamespaceId -Body $body
 }
 
+# ─── Repo ACLs (REST security API, Git repositories namespace) ────────────────
+
+$script:GitRepoNamespaceId = '2e9eb7ed-3c0a-47d4-87c1-0ffdd275fd87'
+
+function ConvertTo-RepoPermissionBit {
+    <#
+        .SYNOPSIS
+        Maps a resolved repo permission to Git-namespace allow bits:
+          read        -> GenericRead(2)
+          write       -> Read + GenericContribute(4) + CreateBranch(16)
+                         + CreateTag(32) + PullRequestContribute(16384)
+          innersource -> Read + CreateBranch + PullRequestContribute
+                         (branch + PR flow, no direct push)
+    #>
+    [CmdletBinding()]
+    param([Parameter(Mandatory)][string]$Permission)
+    switch ($Permission.ToLowerInvariant()) {
+        'read'        { return 2 }
+        'write'       { return 2 + 4 + 16 + 32 + 16384 }
+        'innersource' { return 2 + 16 + 16384 }
+        default       { throw "Unknown repo permission '$Permission' (expected: read, write, innersource)." }
+    }
+}
+
+function Get-AdoRepoAcl {
+    <#
+        .SYNOPSIS
+        Returns a hashtable of securityIdentityDescriptor -> allowBits for a
+        repo's explicit ACEs. Empty hashtable when none exist or on error.
+    #>
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)][string]$OrgUrl,
+        [Parameter(Mandatory)][string]$ProjectId,
+        [Parameter(Mandatory)][string]$RepoId
+    )
+    $tokenEnc = [Uri]::EscapeDataString("repoV2/$ProjectId/$RepoId")
+    $acl = @{}
+    try {
+        $result = Invoke-AdoRest -OrgUrl $OrgUrl `
+            -Path "_apis/accesscontrollists/$script:GitRepoNamespaceId`?token=$tokenEnc&includeExtendedInfo=false&recurse=false"
+        foreach ($list in @($result.value)) {
+            foreach ($prop in $list.acesDictionary.PSObject.Properties) {
+                $acl[$prop.Name] = [int]$prop.Value.allow
+            }
+        }
+    } catch {
+        Write-Verbose "Get-AdoRepoAcl: error reading ACL for repo '$RepoId': $_"
+    }
+    return $acl
+}
+
+function Set-AdoRepoAce {
+    <#
+        .SYNOPSIS
+        Grants the specified allow-bits to a security identity on a repo.
+        merge=true ORs onto existing bits rather than replacing them.
+    #>
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)][string]$OrgUrl,
+        [Parameter(Mandatory)][string]$ProjectId,
+        [Parameter(Mandatory)][string]$RepoId,
+        [Parameter(Mandatory)][string]$IdentityDescriptor,
+        [Parameter(Mandatory)][int]$AllowBits
+    )
+    $body = @{
+        token = "repoV2/$ProjectId/$RepoId"
+        merge = $true
+        accessControlEntries = @(
+            @{ descriptor = $IdentityDescriptor; allow = $AllowBits; deny = 0 }
+        )
+    }
+    Set-AdoAccessControlEntry -OrgUrl $OrgUrl -NamespaceId $script:GitRepoNamespaceId -Body $body
+}
+
 function Set-AdoAccessControlEntry {
     <#
         .SYNOPSIS

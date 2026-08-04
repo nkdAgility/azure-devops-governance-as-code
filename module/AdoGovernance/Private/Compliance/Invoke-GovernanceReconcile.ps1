@@ -499,12 +499,92 @@ function Invoke-GovernanceReconcile {
         }
     }
 
+    # ── 6b. Repo ACLs ──────────────────────────────────────────────────────────
+    # Everyone in the project reads; only the owning team's group writes;
+    # innerOSS additionally opens branch creation + PR contribution to everyone.
+    $projectId     = $null   # lazy-loaded once for ACL security token construction
+    $identityCache = @{}     # subjectDescriptor -> securityIdentityDescriptor
+
+    foreach ($repo in @($Resolved.repos | Where-Object { $_ -and $_.acl })) {
+        if (-not $liveRepos.ContainsKey($repo.name)) {
+            # Just-created repos need a fresh id lookup; refresh once.
+            $liveRepos = Get-AdoRepoSet -OrgUrl $OrgUrl -Project $project
+            if (-not $liveRepos.ContainsKey($repo.name)) { continue }   # creation failed — already reported
+        }
+        if (-not $projectId) {
+            $projectId = Get-AdoProjectId -OrgUrl $OrgUrl -Project $project
+            if (-not $projectId) {
+                & $rError "could not resolve project ID — skipping repo ACL checks"
+                break
+            }
+        }
+        try {
+            $liveAcl  = Get-AdoRepoAcl -OrgUrl $OrgUrl -ProjectId $projectId -RepoId $liveRepos[$repo.name]
+            $aclDrift = [System.Collections.Generic.List[object]]::new()
+
+            foreach ($ace in @($repo.acl | Where-Object { $_ })) {
+                # 'project-valid-users' = the built-in everyone group.
+                $groupName   = if ($ace.principal -eq 'project-valid-users') { 'Project Valid Users' } else { $ace.principal }
+                $subjectDesc = $liveGroups[$groupName]
+                if (-not $subjectDesc) {
+                    $aclDrift.Add([ordered]@{
+                        message      = "DRIFT repo '$($repo.name)': group '$groupName' not found in ADO"
+                        identityDesc = $null; desiredBits = 0 })
+                    continue
+                }
+                if (-not $identityCache.ContainsKey($subjectDesc)) {
+                    $identityCache[$subjectDesc] = Get-AdoGroupIdentityDescriptor `
+                        -OrgUrl $OrgUrl -SubjectDescriptor $subjectDesc
+                }
+                $identityDesc = $identityCache[$subjectDesc]
+                if (-not $identityDesc) {
+                    $aclDrift.Add([ordered]@{
+                        message      = "DRIFT repo '$($repo.name)': cannot resolve security identity for '$groupName'"
+                        identityDesc = $null; desiredBits = 0 })
+                    continue
+                }
+                $desiredBits = ConvertTo-RepoPermissionBit -Permission $ace.permission
+                $actualBits  = if ($liveAcl.ContainsKey($identityDesc)) { [int]$liveAcl[$identityDesc] } else { 0 }
+                if (($actualBits -band $desiredBits) -ne $desiredBits) {
+                    $aclDrift.Add([ordered]@{
+                        message      = "DRIFT repo '$($repo.name)': '$groupName' ($($ace.permission)) has allow=$actualBits, need bits $desiredBits"
+                        identityDesc = $identityDesc
+                        desiredBits  = $desiredBits })
+                }
+            }
+
+            if ($aclDrift.Count -eq 0) {
+                & $rOk "repo ACL: $($repo.name)"
+            } elseif ($doFix) {
+                $fixFailed = $false
+                foreach ($item in $aclDrift) {
+                    if (-not $item.identityDesc) {
+                        $findings.Add($item.message); & $rError $item.message; $fixFailed = $true; continue
+                    }
+                    try {
+                        Set-AdoRepoAce -OrgUrl $OrgUrl -ProjectId $projectId -RepoId $liveRepos[$repo.name] `
+                            -IdentityDescriptor $item.identityDesc -AllowBits $item.desiredBits
+                    } catch {
+                        $findings.Add("ERROR setting repo ACL on '$($repo.name)': $_")
+                        & $rError "set repo ACL '$($repo.name)': $_"
+                        $fixFailed = $true
+                    }
+                }
+                if (-not $fixFailed) { & $rFixed "repo ACL: $($repo.name)" }
+            } else {
+                foreach ($item in $aclDrift) { $findings.Add($item.message) }
+                if ($Mode -eq 'WhatIf') { & $rWould "correct repo ACL: $($repo.name)" }
+                else                     { & $rDrift "repo ACL: $($repo.name)" }
+            }
+        } catch {
+            & $rError "read repo ACL for '$($repo.name)': $_"
+        }
+    }
+
     # ── 7. Pipeline folders ────────────────────────────────────────────────────────
     Write-Host "`n--- Pipeline folders ---" -ForegroundColor Cyan
 
     $liveFolders   = Get-AdoPipelineFolderSet -OrgUrl $OrgUrl -Project $project
-    $projectId     = $null   # lazy-loaded once for ACL security token construction
-    $identityCache = @{}     # subjectDescriptor -> securityIdentityDescriptor
 
     foreach ($folder in @($Resolved.pipelineFolders | Where-Object { $_ })) {
         $folderExists = $liveFolders.ContainsKey($folder.path)
