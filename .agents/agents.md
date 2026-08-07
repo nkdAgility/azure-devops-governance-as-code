@@ -196,12 +196,20 @@ programs/            # empty by default — client programs live in client repos
 
 tests/fixtures/programs/  # frozen program snapshot — compile-test data only
 
-module/AdoGovernance/
+system/NKDAgility.AzureDevOps.Governance/
   Private/
     Compile/         # build stage: Import → Resolve → Write/Test
     Common/          # shared helpers (ConvertTo-Kebab etc.)
     AzureDevOps/     # thin wrappers over ADO REST API
   Public/            # exported cmdlets (one per command verb)
+  Templates/         # what gets scaffolded into a customer workspace
+    customer-repo/governance/   # capability init.ps1 + programs skeleton
+  Agents/
+    CAPABILITY.md    # guidance for agents USING this capability in a workspace;
+                     # rendered into the workspace CLAUDE.md / AGENTS.md
+
+.agents/             # guidance for agents BUILDING this engine (this file, ADRs).
+                     # Never ships to a customer workspace.
 
 tests/               # Pester tests — Compile.Tests.ps1 covers the full compile pipeline
 out/                 # generated artifacts (gitignored)

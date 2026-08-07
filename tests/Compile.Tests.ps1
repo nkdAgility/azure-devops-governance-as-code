@@ -2,7 +2,7 @@
 
 BeforeAll {
     $repoRoot = Split-Path -Parent $PSScriptRoot
-    Import-Module (Join-Path $repoRoot 'module/AdoGovernance/AdoGovernance.psd1') -Force
+    Import-Module (Join-Path $repoRoot 'system/NKDAgility.AzureDevOps.Governance/NKDAgility.AzureDevOps.Governance.psd1') -Force
 
     # Frozen snapshot of a real program, used purely as compile-pipeline test
     # data. Live client programs no longer live in this repo (they sit in the
@@ -28,7 +28,7 @@ Describe 'Compile stage' {
     }
 
     It 'defaults the project declaration when the manifest has no project block' {
-        InModuleScope AdoGovernance {
+        InModuleScope NKDAgility.AzureDevOps.Governance {
             $resolved = Resolve-Governance -Manifest @{ program = 'Demo'; org = 'demo-org' } `
                 -Source @{ products = @() } `
                 -Access @{ teamGroups = @(); containerGroups = @(); roles = @{};
@@ -42,7 +42,7 @@ Describe 'Compile stage' {
     }
 
     It 'rejects an invalid project visibility' {
-        InModuleScope AdoGovernance {
+        InModuleScope NKDAgility.AzureDevOps.Governance {
             $issues = Test-ResolvedGovernance -Resolved @{
                 project = @{ visibility = 'internal'; sourceControl = 'git' }; areaPaths = @(); teams = @() }
             $issues | Should -Contain "Project visibility must be 'private' or 'public', got 'internal'"
@@ -50,7 +50,7 @@ Describe 'Compile stage' {
     }
 
     It 'rejects an invalid project sourceControl' {
-        InModuleScope AdoGovernance {
+        InModuleScope NKDAgility.AzureDevOps.Governance {
             $issues = Test-ResolvedGovernance -Resolved @{
                 project = @{ visibility = 'private'; sourceControl = 'svn' }; areaPaths = @(); teams = @() }
             $issues | Should -Contain "Project sourceControl must be 'git' or 'tfvc', got 'svn'"
@@ -132,7 +132,7 @@ Describe 'Compile stage' {
     }
 
     It 'rejects the legacy string section grammar with a clear error' {
-        InModuleScope AdoGovernance {
+        InModuleScope NKDAgility.AzureDevOps.Governance {
             { Resolve-Governance -Manifest @{ program = 'Demo'; org = 'demo' } `
                 -Source @{ products = @(@{ name = 'P'; short = 'P'; dpm = 1; sections = @('platform'); platform = @() }) } `
                 -Access @{ teamGroups = @(); containerGroups = @(); roles = @{};
@@ -260,7 +260,7 @@ Describe 'Compile stage' {
     }
 
     It 'rejects the removed owner: keyword with a migration hint' {
-        InModuleScope AdoGovernance {
+        InModuleScope NKDAgility.AzureDevOps.Governance {
             { Resolve-Governance -Manifest @{ program = 'Demo'; org = 'demo' } `
                 -Source @{ products = @(@{ name = 'P'; short = 'P'; dpm = 1
                     sections = @(@{ name = 'Band'; items = @(@{ name = 'X'; owner = 'P-Y' }) }) }) } `
@@ -271,7 +271,7 @@ Describe 'Compile stage' {
     }
 
     It 'excludes expired member entries from the desired state' {
-        InModuleScope AdoGovernance {
+        InModuleScope NKDAgility.AzureDevOps.Governance {
             $resolved = Resolve-Governance -Manifest @{ program = 'Demo'; org = 'demo-org' } `
                 -Source @{ products = @() } `
                 -Access @{ teamGroups = @(); roles = @{};
@@ -290,7 +290,7 @@ Describe 'Compile stage' {
     }
 
     It 'fails the build when an active team has no members file (governance active)' {
-        InModuleScope AdoGovernance {
+        InModuleScope NKDAgility.AzureDevOps.Governance {
             {
                 Resolve-Governance -Manifest @{ program = 'Demo'; org = 'demo-org' } `
                     -Source @{ products = @(@{ name = 'Prod'; short = 'PRD' }) } `
@@ -338,24 +338,24 @@ Describe 'Compile stage' {
 Describe 'Pipeline folder ACL resolution' {
 
     It 'maps read permission to correct bit mask' {
-        InModuleScope AdoGovernance {
+        InModuleScope NKDAgility.AzureDevOps.Governance {
             ConvertTo-PipelinePermissionBit -Permission 'read' | Should -Be 1025
         }
     }
 
     It 'maps Edit, Queue permission to correct bit mask' {
-        InModuleScope AdoGovernance {
+        InModuleScope NKDAgility.AzureDevOps.Governance {
             ConvertTo-PipelinePermissionBit -Permission 'Edit, Queue' | Should -Be 3201
         }
     }
 
     It 'throws on an unknown permission string' {
-        { InModuleScope AdoGovernance { ConvertTo-PipelinePermissionBit -Permission 'unknown' } } |
+        { InModuleScope NKDAgility.AzureDevOps.Governance { ConvertTo-PipelinePermissionBit -Permission 'unknown' } } |
             Should -Throw
     }
 
     It 'maps repo permissions to Git-namespace bits' {
-        InModuleScope AdoGovernance {
+        InModuleScope NKDAgility.AzureDevOps.Governance {
             ConvertTo-RepoPermissionBit -Permission 'read'        | Should -Be 2
             ConvertTo-RepoPermissionBit -Permission 'write'       | Should -Be 16438
             ConvertTo-RepoPermissionBit -Permission 'innersource' | Should -Be 16402
@@ -363,7 +363,7 @@ Describe 'Pipeline folder ACL resolution' {
     }
 
     It 'throws on an unknown repo permission' {
-        { InModuleScope AdoGovernance { ConvertTo-RepoPermissionBit -Permission 'admin' } } |
+        { InModuleScope NKDAgility.AzureDevOps.Governance { ConvertTo-RepoPermissionBit -Permission 'admin' } } |
             Should -Throw
     }
 
@@ -376,35 +376,35 @@ Describe 'Pipeline folder ACL resolution' {
 Describe 'ADO REST host routing' {
 
     It 'routes graph paths to the SPS host on dev.azure.com orgs' {
-        InModuleScope AdoGovernance {
+        InModuleScope NKDAgility.AzureDevOps.Governance {
             Resolve-AdoRequestUri -OrgUrl 'https://dev.azure.com/acme' -Path '_apis/graph/groups' |
                 Should -Be 'https://vssps.dev.azure.com/acme/_apis/graph/groups'
         }
     }
 
     It 'routes graph paths to the SPS host on legacy visualstudio.com orgs' {
-        InModuleScope AdoGovernance {
+        InModuleScope NKDAgility.AzureDevOps.Governance {
             Resolve-AdoRequestUri -OrgUrl 'https://acme.visualstudio.com' -Path '_apis/graph/memberships/x/y' |
                 Should -Be 'https://acme.vssps.visualstudio.com/_apis/graph/memberships/x/y'
         }
     }
 
     It 'routes user entitlement paths to the vsaex host' {
-        InModuleScope AdoGovernance {
+        InModuleScope NKDAgility.AzureDevOps.Governance {
             Resolve-AdoRequestUri -OrgUrl 'https://dev.azure.com/acme' -Path '_apis/userentitlements?top=1' |
                 Should -Be 'https://vsaex.dev.azure.com/acme/_apis/userentitlements?top=1'
         }
     }
 
     It 'leaves core-host paths untouched' {
-        InModuleScope AdoGovernance {
+        InModuleScope NKDAgility.AzureDevOps.Governance {
             Resolve-AdoRequestUri -OrgUrl 'https://dev.azure.com/acme' -Path 'Proj/_apis/git/repositories' |
                 Should -Be 'https://dev.azure.com/acme/Proj/_apis/git/repositories'
         }
     }
 
     It 'does not reroute project-scoped paths that merely contain graph' {
-        InModuleScope AdoGovernance {
+        InModuleScope NKDAgility.AzureDevOps.Governance {
             Resolve-AdoRequestUri -OrgUrl 'https://dev.azure.com/acme' -Path 'Proj/_apis/graphite' |
                 Should -Be 'https://dev.azure.com/acme/Proj/_apis/graphite'
         }
@@ -414,40 +414,40 @@ Describe 'ADO REST host routing' {
 Describe 'Auth mode resolution (Entra-first)' {
 
     It 'defaults to entra when an az session exists' {
-        InModuleScope AdoGovernance {
+        InModuleScope NKDAgility.AzureDevOps.Governance {
             Resolve-AdoAuthMode -DeclaredMode $null -HasEntraSession $true -HasPatToken $true | Should -Be 'entra'
             Resolve-AdoAuthMode -DeclaredMode ''    -HasEntraSession $true -HasPatToken $false | Should -Be 'entra'
         }
     }
 
     It 'falls back to a configured PAT when no az session exists' {
-        InModuleScope AdoGovernance {
+        InModuleScope NKDAgility.AzureDevOps.Governance {
             Resolve-AdoAuthMode -DeclaredMode $null -HasEntraSession $false -HasPatToken $true | Should -Be 'pat-fallback'
         }
     }
 
     It 'honours an explicit auth: pat declaration' {
-        InModuleScope AdoGovernance {
+        InModuleScope NKDAgility.AzureDevOps.Governance {
             Resolve-AdoAuthMode -DeclaredMode 'pat' -HasEntraSession $true -HasPatToken $true | Should -Be 'pat'
         }
     }
 
     It 'throws when auth: pat is declared without a resolvable token' {
-        InModuleScope AdoGovernance {
+        InModuleScope NKDAgility.AzureDevOps.Governance {
             { Resolve-AdoAuthMode -DeclaredMode 'pat' -HasEntraSession $true -HasPatToken $false } |
                 Should -Throw '*accessToken did not resolve*'
         }
     }
 
     It 'throws when no credential of any kind is available' {
-        InModuleScope AdoGovernance {
+        InModuleScope NKDAgility.AzureDevOps.Governance {
             { Resolve-AdoAuthMode -DeclaredMode $null -HasEntraSession $false -HasPatToken $false } |
                 Should -Throw '*az login*'
         }
     }
 
     It 'rejects unknown auth modes' {
-        InModuleScope AdoGovernance {
+        InModuleScope NKDAgility.AzureDevOps.Governance {
             { Resolve-AdoAuthMode -DeclaredMode 'oauth' -HasEntraSession $true -HasPatToken $true } |
                 Should -Throw "*must be 'entra' or 'pat'*"
         }
@@ -457,14 +457,14 @@ Describe 'Auth mode resolution (Entra-first)' {
 Describe 'PAT scope probe verdicts' {
 
     It 'treats success statuses as ok' {
-        InModuleScope AdoGovernance {
+        InModuleScope NKDAgility.AzureDevOps.Governance {
             Resolve-AdoProbeVerdict -StatusCode 200 -ContentType 'application/json' | Should -Be 'ok'
             Resolve-AdoProbeVerdict -StatusCode 204 | Should -Be 'ok'
         }
     }
 
     It 'treats request-validation failures as ok (scope check happens first)' {
-        InModuleScope AdoGovernance {
+        InModuleScope NKDAgility.AzureDevOps.Governance {
             Resolve-AdoProbeVerdict -StatusCode 400 | Should -Be 'ok'
             Resolve-AdoProbeVerdict -StatusCode 404 | Should -Be 'ok'
             Resolve-AdoProbeVerdict -StatusCode 405 | Should -Be 'ok'
@@ -472,7 +472,7 @@ Describe 'PAT scope probe verdicts' {
     }
 
     It 'treats auth failures as missing' {
-        InModuleScope AdoGovernance {
+        InModuleScope NKDAgility.AzureDevOps.Governance {
             Resolve-AdoProbeVerdict -StatusCode 401 | Should -Be 'missing'
             Resolve-AdoProbeVerdict -StatusCode 403 | Should -Be 'missing'
             Resolve-AdoProbeVerdict -StatusCode 203 | Should -Be 'missing'
@@ -481,19 +481,19 @@ Describe 'PAT scope probe verdicts' {
     }
 
     It 'treats an HTML body on success status as missing (sign-in page)' {
-        InModuleScope AdoGovernance {
+        InModuleScope NKDAgility.AzureDevOps.Governance {
             Resolve-AdoProbeVerdict -StatusCode 200 -ContentType 'text/html; charset=utf-8' | Should -Be 'missing'
         }
     }
 
     It 'treats server errors as unknown' {
-        InModuleScope AdoGovernance {
+        InModuleScope NKDAgility.AzureDevOps.Governance {
             Resolve-AdoProbeVerdict -StatusCode 500 | Should -Be 'unknown'
         }
     }
 
     It 'diagnoses ACL 401s as the non-selectable security scope' {
-        InModuleScope AdoGovernance {
+        InModuleScope NKDAgility.AzureDevOps.Governance {
             Resolve-GovernanceErrorReason -Finding "ERROR setting ACL on '\X' for identity 'Y': Response status code does not indicate success: 401 (Unauthorized)." |
                 Should -Match 'security ACLs'
             Resolve-GovernanceErrorReason -Finding "ERROR granting structural authority to 'X' on '\Y': 401 (Unauthorized)." |
@@ -502,14 +502,14 @@ Describe 'PAT scope probe verdicts' {
     }
 
     It 'diagnoses generic 401s as a missing PAT scope' {
-        InModuleScope AdoGovernance {
+        InModuleScope NKDAgility.AzureDevOps.Governance {
             Resolve-GovernanceErrorReason -Finding "ERROR creating repo 'x': The requested resource requires user authentication" |
                 Should -Match "doctor"
         }
     }
 
     It 'diagnoses unresolvable members, with and without a near-match' {
-        InModuleScope AdoGovernance {
+        InModuleScope NKDAgility.AzureDevOps.Governance {
             Resolve-GovernanceErrorReason -Finding "UNRESOLVABLE member 'a.b@c.com' in 'G': no org member has this exact UPN - did you mean: AB@c.com (A B)?" |
                 Should -Match 'fix the UPN'
             Resolve-GovernanceErrorReason -Finding "UNRESOLVABLE member 'a.b@c.com' in 'G': no org member matches this UPN" |
@@ -518,7 +518,7 @@ Describe 'PAT scope probe verdicts' {
     }
 
     It 'diagnoses backlog level name mismatches as a cadence.yaml problem' {
-        InModuleScope AdoGovernance {
+        InModuleScope NKDAgility.AzureDevOps.Governance {
             Resolve-GovernanceErrorReason -Finding "DRIFT team 'T': configured backlog level 'God Mode' does not exist in the process (levels: A, B)" |
                 Should -Match 'cadence.yaml'
             Resolve-GovernanceErrorReason -Finding "ERROR setting backlog levels for 'T': VS402489: You cannot hide all backlog levels." |
@@ -527,13 +527,13 @@ Describe 'PAT scope probe verdicts' {
     }
 
     It 'returns null for undiagnosed signatures' {
-        InModuleScope AdoGovernance {
+        InModuleScope NKDAgility.AzureDevOps.Governance {
             Resolve-GovernanceErrorReason -Finding 'ERROR something entirely novel' | Should -BeNullOrEmpty
         }
     }
 
     It 'covers every scope family the engine calls' {
-        InModuleScope AdoGovernance {
+        InModuleScope NKDAgility.AzureDevOps.Governance {
             $probes = Get-AdoScopeProbeSet -Project 'Demo'
             $probes.Scope | Should -Contain 'vso.project_manage'
             $probes.Scope | Should -Contain 'vso.work_write'
