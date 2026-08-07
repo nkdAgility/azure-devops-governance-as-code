@@ -40,7 +40,44 @@ Describe 'Module is self-contained' {
 
     It 'ships the capability template it scaffolds into a workspace' {
         Join-Path $script:ModuleRoot 'Templates\customer-repo\governance\init.ps1' | Should -Exist
-        Join-Path $script:ModuleRoot 'Agents\CAPABILITY.md' | Should -Exist
+    }
+}
+
+Describe 'Engine shape' {
+
+    # Every nkdAgility engine presents the same surface to a customer workspace, so the
+    # workspace's init.ps1 can drive any of them without special-casing. This asserts
+    # THIS engine's half of that contract; azure-devops-automation-tools asserts the
+    # same list against its own module. Change one, change both.
+
+    It 'is a module folder named for the module' {
+        $manifestName = [System.IO.Path]::GetFileNameWithoutExtension($script:ManifestPath)
+        Split-Path -Leaf $script:ModuleRoot | Should -BeExactly $manifestName
+    }
+
+    It 'ships Templates\customer-repo laid out relative to the workspace root' {
+        Join-Path $script:ModuleRoot 'Templates\customer-repo' | Should -Exist
+    }
+
+    It 'declares which of those files it owns' {
+        $managed = Join-Path $script:ModuleRoot 'Templates\customer-repo\.managed'
+        $managed | Should -Exist -Because 'the workspace refreshes exactly the files an engine names here, and treats the rest as seeds'
+        @(Get-Content $managed | Where-Object { $_.Trim() -and -not $_.Trim().StartsWith('#') }) |
+            Should -Not -BeNullOrEmpty
+    }
+
+    It 'every managed path exists in the template' {
+        $templateRoot = Join-Path $script:ModuleRoot 'Templates\customer-repo'
+        $managed = @(Get-Content (Join-Path $templateRoot '.managed') |
+                Where-Object { $_.Trim() -and -not $_.Trim().StartsWith('#') } |
+                ForEach-Object { $_.Trim() -replace '/', '\' })
+        foreach ($relative in $managed) {
+            Join-Path $templateRoot $relative | Should -Exist -Because "'$relative' is declared managed but is not in the template"
+        }
+    }
+
+    It 'ships agent guidance for the capability' {
+        Join-Path $script:ModuleRoot 'Agents\CAPABILITY.md' | Should -Exist -Because 'the workspace renders this into CLAUDE.md, AGENTS.md and copilot-instructions.md'
     }
 
     It 'imports when copied out of the repo' {
