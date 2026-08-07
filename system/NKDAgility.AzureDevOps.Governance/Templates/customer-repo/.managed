@@ -1,0 +1,8 @@
+# Files this capability OWNS in a customer workspace. The workspace's init.ps1
+# overwrites each one from Templates\customer-repo\ on every run, so they must be
+# edited in this repo. Everything else in the template is a seed: copied once, then
+# the workspace's own (programs/ in particular is authored by the engagement).
+#
+# One relative path per line. Blank lines and # comments ignored.
+
+governance/init.ps1

@@ -4,7 +4,7 @@
     Single entry point for Azure DevOps governance-as-code.
 
 .DESCRIPTION
-    Bootstraps dependencies, imports the in-repo AdoGovernance module, and
+    Bootstraps dependencies, imports the in-repo NKDAgility.AzureDevOps.Governance module, and
     dispatches a command across one or all programs under programs/.
 
     Each program is a folder programs/<name>/ containing:
@@ -87,7 +87,7 @@ Examples:
     return
 }
 
-$moduleManifest = Join-Path $PSScriptRoot 'module/AdoGovernance/AdoGovernance.psd1'
+$moduleManifest = Join-Path $PSScriptRoot 'system/NKDAgility.AzureDevOps.Governance/NKDAgility.AzureDevOps.Governance.psd1'
 $programsRoot   = if ($ProgramsRoot) { (Resolve-Path $ProgramsRoot).Path } else { Join-Path $PSScriptRoot 'programs' }
 $buildRoot      = if ($OutputRoot)   { $OutputRoot }                       else { Join-Path $PSScriptRoot 'out' }
 

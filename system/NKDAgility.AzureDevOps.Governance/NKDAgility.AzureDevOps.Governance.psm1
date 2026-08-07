@@ -1,8 +1,14 @@
-# AdoGovernance module loader.
+# NKDAgility.AzureDevOps.Governance module loader.
 # Dot-sources every Private/ (internals, by stage) then Public/ (exported verbs),
 # and exports only the public cmdlets.
 
 $ErrorActionPreference = 'Stop'
+
+# The module's own root. Every function that needs a file shipped with the module
+# resolves it from here - never by walking up from $PSScriptRoot. The module is copied
+# out of this repo into a client workspace's .system\ folder, so anything above this
+# folder does not exist at runtime.
+$script:ModuleRoot = $PSScriptRoot
 
 $private = @(Get-ChildItem -Path (Join-Path $PSScriptRoot 'Private') -Filter '*.ps1' -Recurse -ErrorAction SilentlyContinue)
 $public  = @(Get-ChildItem -Path (Join-Path $PSScriptRoot 'Public')  -Filter '*.ps1' -Recurse -ErrorAction SilentlyContinue)
