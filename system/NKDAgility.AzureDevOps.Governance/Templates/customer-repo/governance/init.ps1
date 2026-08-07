@@ -26,9 +26,14 @@
     init.ps1 exports them, and manifest.yaml references one by name as accessToken.
 
 .EXAMPLE
-    Invoke-GovernanceBuild -ProgramPath .\governance\programs\odyssey
-    Invoke-GovernancePlan  -ProgramPath .\governance\programs\odyssey
-    Invoke-GovernanceAudit -ProgramPath .\governance\programs\odyssey
+    Invoke-Governance build    odyssey
+    Invoke-Governance plan     odyssey
+    Invoke-Governance audit    odyssey
+    Invoke-Governance apply    odyssey -WhatIf
+
+    Invoke-Governance resolves the program and resolved.yaml paths from this folder and
+    the workspace output folder. The module's own commands remain available if you want
+    to be explicit about both.
 #>
 [CmdletBinding()]
 param(
@@ -54,6 +59,49 @@ if (-not (Get-Module -ListAvailable -Name 'powershell-yaml')) {
 Import-Module $modulePath -Force
 
 $programsRoot = Join-Path $PSScriptRoot 'programs'
+# Invoke-Governance is global so it outlives this script, so it cannot close over a
+# script-scoped variable - by the time anyone calls it, this scope is gone. The roots go
+# in globals it can still reach.
+$Global:NkdaGovernanceProgramsRoot = $programsRoot
+$Global:NkdaGovernanceFallbackOut = Join-Path $PSScriptRoot 'out'
+
+# Resolve a program name to the two paths every governance command needs, so runbooks and
+# CI say 'odyssey' rather than repeating both. This is workspace glue, deliberately not
+# engine code: the module's commands stay explicit about what they read and write.
+function Global:Invoke-Governance {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory, Position = 0)]
+        [ValidateSet('build', 'validate', 'plan', 'apply', 'audit')]
+        [string]$Command,
+
+        [Parameter(Mandatory, Position = 1)]
+        [string]$Program,
+
+        [string]$Org,
+        [switch]$WhatIf,
+        [switch]$Prune
+    )
+
+    $programPath = Join-Path $Global:NkdaGovernanceProgramsRoot $Program
+    if (-not (Test-Path -LiteralPath (Join-Path $programPath 'manifest.yaml'))) {
+        throw "No governance program '$Program' at '$programPath' (expected a manifest.yaml)."
+    }
+
+    $outputRoot = try { Join-Path (Get-AutomationWorkspace).OutputFolder 'governance' }
+    catch { $Global:NkdaGovernanceFallbackOut }
+    $resolvedPath = Join-Path (Join-Path $outputRoot $Program) 'resolved.yaml'
+    New-Item -Path (Split-Path -Parent $resolvedPath) -ItemType Directory -Force | Out-Null
+
+    switch ($Command) {
+        'build' { Invoke-GovernanceBuild -ProgramPath $programPath -OutputPath $resolvedPath }
+        'validate' { Test-Governance -ProgramPath $programPath }
+        'plan' { Invoke-GovernancePlan -ProgramPath $programPath -ResolvedPath $resolvedPath -Org $Org }
+        'audit' { Invoke-GovernanceAudit -ProgramPath $programPath -ResolvedPath $resolvedPath -Org $Org }
+        'apply' { Invoke-GovernanceApply -ProgramPath $programPath -ResolvedPath $resolvedPath -Org $Org -WhatIf:$WhatIf -Prune:$Prune }
+    }
+}
+
 $programs = @(Get-ChildItem -LiteralPath $programsRoot -Directory -ErrorAction SilentlyContinue |
         Where-Object { Test-Path -LiteralPath (Join-Path $_.FullName 'manifest.yaml') })
 
