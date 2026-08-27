@@ -12,7 +12,7 @@ function Test-Governance {
 
     $program  = Split-Path $ProgramPath -Leaf
     $source   = Import-GovernanceSource -ProgramPath $ProgramPath
-    $resolved = Resolve-Governance -Manifest $source.Manifest -Source $source.Hierarchy -Access $source.Access -Members $source.Members -SourceHash $source.Hash
+    $resolved = Resolve-Governance -Manifest $source.Manifest -Source $source.Hierarchy -Access $source.Access -Members $source.Members -SourceHash $source.Hash -Systems $source.Systems
 
     $issues = Test-ResolvedGovernance -Resolved $resolved
 

@@ -1,10 +1,10 @@
 # programs/odyssey/hierarchy.yaml — THE authored hierarchy (structure only).
 # Program identity + connection live in manifest.yaml.
 #
-# Grammar:  Odyssey \ {product-dpm} \ {band}* \ {node}*
-#   - position in the tree IS the type (product / band / team)
+# Grammar:  Odyssey \ {product-dpm} \ {structural}* \ {node}*
+#   - position in the tree IS the type (product / structural / team)
 #   - a product is a product because it has a `dpm`
-#   - `sections` registers the bands: - name: <display name> / items: [...]
+#   - `sections` registers the structural nodes: - name: <display name> / items: [...]
 #     (display names are free-form — parentheses etc. are fine)
 #   - `sideload: <code>` (or a list) = area path here, added to the sideloading
 #     team(s)' boards. Area-path visibility ONLY — never security/authority.
@@ -24,10 +24,13 @@
 #   - `iterations: sprints|seasons|none` overrides the type's iteration scope
 #   - `pipelineFolder: true` = the node has builds of its own, so a pipeline
 #     folder (+ team ACL) is created for it (default: false - no folder)
+#   - `systems: [<name>, ...]` = reusable systems from systems.yaml stamped
+#     onto the team: child areas under the team's home area, on the team's own
+#     board (visibility only, zero security). Team nodes and products only.
 
 products:
 
-  # ── Portal: large product, all three bands, teams within teams ──
+  # ── Portal: large product, all three structural nodes, teams within teams ──
   - name: Portal
     dpm: 101
     short: PTL
@@ -38,30 +41,38 @@ products:
           - name: Graphics Pipeline
             short: GPI
             pipelineFolder: true
+            systems: [bug-inbox]
           - name: Foundation
             short: FND
             pipelineFolder: true
             type: delivery      # working team even though Open API nests under it
             iterations: none    # delivery team that does not plan in sprints
+            systems: [bug-inbox]
           - name: Geometry Library
             short: GLI
+            systems: [bug-inbox]
           - name: Resource Modeling
             short: RVM
             pipelineFolder: true
+            systems: [bug-inbox]
           - name: Stream Modeling
             short: STM
             pipelineFolder: true
             type: delivery          # its own team...
             sideload: PTL-GPI       # ...AND sideloaded into GPI's board
+            systems: [bug-inbox]
           - name: Connected Framework
             short: CNF
             pipelineFolder: true
+            systems: [bug-inbox]
           - name: Rendering Engine and Grids
             short: REG
             pipelineFolder: true
+            systems: [bug-inbox]
           - name: Runtime Geometry
             short: RGM
             pipelineFolder: true
+            systems: [bug-inbox]
       - name: Plugins
         items:
           - name: Plugin A
@@ -117,24 +128,3 @@ products:
   - { name: Trace Log,  dpm: 107, short: TLG, scope: future }
   - { name: Integrate, dpm: 108, short: INT, scope: future }
   - { name: PTS,       dpm: 109, short: PTS, scope: future }
-
-# Governed tag taxonomy (everything that is not a team becomes a
-# tag). `sanctioned` is the allowed structural vocabulary — anything else in ADO
-# is an audit exception. `disallowedPatterns` are ALWAYS drift (build-id-shaped
-# tags). Tags cannot be pre-created via REST (ADO purges
-# unused tags), so existence of sanctioned tags is not audited — only extras.
-tags:
-  sanctioned:
-    - Inbox
-    - Backlog
-    - Triage
-    - Priority-Bug
-    - QA-Test
-    - Sanity
-    - Research
-    - Stakeholders
-    - Open API
-    - Spike
-  disallowedPatterns:
-    - '^\d+$'             # bare build numbers
-    - '^(build|bld)[-_ ]' # build-id prefixed

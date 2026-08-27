@@ -367,7 +367,8 @@ function Invoke-AdoRest {
         [string]$Method     = 'GET',
         [object]$Body       = $null,
         [string]$ApiVersion = '7.1',
-        [ValidateSet('', 'pat', 'entra')][string]$Auth = ''
+        [ValidateSet('', 'pat', 'entra')][string]$Auth = '',
+        [string]$ContentType = 'application/json'   # work item writes need application/json-patch+json
     )
     if (-not $Auth) { $Auth = if ($script:AdoAuthMode) { $script:AdoAuthMode } else { 'pat' } }
     # Accept: application/json is required — without it ADO returns an HTML page (HTTP 203).
@@ -385,8 +386,10 @@ function Invoke-AdoRest {
     $params = @{ Uri = $uri; Method = $Method; Headers = $headers; ErrorAction = 'Stop';
                  PreserveAuthorizationOnRedirect = $true }
     if ($null -ne $Body) {
-        $params['Body']        = ($Body | ConvertTo-Json -Depth 10 -Compress)
-        $params['ContentType'] = 'application/json'
+        # -InputObject, not the pipeline: piping unrolls a single-element array,
+        # which would turn a one-operation JSON-Patch document into a bare object.
+        $params['Body']        = (ConvertTo-Json -InputObject $Body -Depth 10 -Compress)
+        $params['ContentType'] = $ContentType
     }
     $response = Invoke-RestMethod @params
     # ADO returns an HTML sign-in page (HTTP 203) when auth fails or the PAT lacks scope.
@@ -395,6 +398,16 @@ function Invoke-AdoRest {
     # that, which is the expected success response, not an error.
     if ($response -is [string]) {
         if ($Method -ieq 'DELETE' -and [string]::IsNullOrEmpty($response)) { return $null }
+        # Invoke-RestMethod ALSO hands back the raw string when the body is json but
+        # ConvertFrom-Json refuses it. ADO does this in practice: work item type
+        # definitions from a customised process carry a property whose name is an
+        # empty string, which only -AsHashtable accepts. That is a healthy HTTP 200,
+        # not an auth failure — retry before blaming the token, or a perfectly good
+        # response gets reported to the operator as a missing PAT scope.
+        $trimmed = $response.TrimStart()
+        if ($trimmed.StartsWith('{') -or $trimmed.StartsWith('[')) {
+            try { return ($response | ConvertFrom-Json -AsHashtable -Depth 100) } catch { }
+        }
         throw "ADO REST returned non-JSON (HTML/text). Check PAT is set and has the required scope. URL: $uri"
     }
     return $response
@@ -1229,6 +1242,89 @@ function Remove-AdoTag {
     param([string]$OrgUrl, [string]$Project, [string]$TagId)
     Invoke-AdoRest -OrgUrl $OrgUrl -Path "$Project/_apis/wit/tags/$TagId" `
         -Method 'DELETE' -ApiVersion '7.1-preview.1' | Out-Null
+}
+
+# ─── Tag anchor work item (ADR-006) ──────────────────────────────────────────
+# ADO exposes no create-tag API (POST /_apis/wit/tags -> 405) and purges tags
+# that no work item references. Holding every sanctioned tag on one governed
+# work item is the only way to make the vocabulary exist and stay existing.
+
+function Get-AdoWorkItemTypeName {
+    <# Returns the project's work item type names. Used to validate the anchor
+       type before apply writes anything — custom processes rename/remove the
+       stock types, and a bad type name must fail with a readable message. #>
+    [CmdletBinding()]
+    param([string]$OrgUrl, [string]$Project)
+    $data = Invoke-AdoRest -OrgUrl $OrgUrl -Path "$Project/_apis/wit/workitemtypes"
+    return @(@($data.value) | ForEach-Object { $_.name })
+}
+
+function Find-AdoTagAnchor {
+    <#
+        .SYNOPSIS
+        Finds the tag anchor work item by title, returning its id or $null.
+        Located by WIQL rather than a stored id so the anchor is self-healing:
+        a fresh clone with no state file still finds the existing anchor
+        instead of creating a duplicate.
+    #>
+    [CmdletBinding()]
+    param([string]$OrgUrl, [string]$Project, [string]$Title)
+
+    $escaped = $Title -replace "'", "''"
+    $wiql    = "SELECT [System.Id] FROM WorkItems WHERE [System.TeamProject] = '$($Project -replace "'", "''")' AND [System.Title] = '$escaped' ORDER BY [System.Id] ASC"
+    $result  = Invoke-AdoRest -OrgUrl $OrgUrl -Path "$Project/_apis/wit/wiql" `
+        -Method 'POST' -Body @{ query = $wiql }
+
+    $items = @($result.workItems)
+    if ($items.Count -eq 0) { return $null }
+    return [int]$items[0].id
+}
+
+function Get-AdoWorkItemTag {
+    <# Returns the tag names currently on a work item. #>
+    [CmdletBinding()]
+    param([string]$OrgUrl, [string]$Project, [int]$Id)
+    $wi   = Invoke-AdoRest -OrgUrl $OrgUrl -Path "$Project/_apis/wit/workitems/$Id`?fields=System.Tags"
+    $tags = $wi.fields.'System.Tags'
+    if ([string]::IsNullOrWhiteSpace($tags)) { return @() }
+    return @($tags -split ';' | ForEach-Object { $_.Trim() } | Where-Object { $_ })
+}
+
+function New-AdoTagAnchor {
+    <#
+        .SYNOPSIS
+        Creates the tag anchor work item carrying the sanctioned tag set.
+        Returns the new work item id.
+    #>
+    [CmdletBinding()]
+    param(
+        [string]$OrgUrl, [string]$Project, [string]$Title,
+        [string]$WorkItemType, [string[]]$Tags,
+        [string]$AreaPath = '', [string]$State = ''
+    )
+    $ops = [System.Collections.Generic.List[object]]::new()
+    $ops.Add(@{ op = 'add'; path = '/fields/System.Title'; value = $Title })
+    $ops.Add(@{ op = 'add'; path = '/fields/System.Tags';  value = (($Tags | Sort-Object) -join '; ') })
+    $ops.Add(@{ op = 'add'; path = '/fields/System.Description'
+                value = 'Governance-owned. Holds the sanctioned tag vocabulary so those tags exist in the tag picker. Azure DevOps deletes tags that no work item references; deleting this item deletes the vocabulary with it. Managed by governance apply - do not edit or delete.' })
+    if ($AreaPath) { $ops.Add(@{ op = 'add'; path = '/fields/System.AreaPath'; value = $AreaPath }) }
+    if ($State)    { $ops.Add(@{ op = 'add'; path = '/fields/System.State';    value = $State }) }
+
+    # $type in the path must be URL-escaped: custom process types contain spaces.
+    $escapedType = [uri]::EscapeDataString($WorkItemType)
+    $created = Invoke-AdoRest -OrgUrl $OrgUrl -Path "$Project/_apis/wit/workitems/`$$escapedType" `
+        -Method 'POST' -Body $ops.ToArray() -ContentType 'application/json-patch+json'
+    if (-not $created.id) { throw "Tag anchor create returned no work item id." }
+    return [int]$created.id
+}
+
+function Set-AdoTagAnchorTag {
+    <# Replaces the anchor's tag set with exactly the supplied tags. #>
+    [CmdletBinding()]
+    param([string]$OrgUrl, [string]$Project, [int]$Id, [string[]]$Tags)
+    $ops = @(@{ op = 'add'; path = '/fields/System.Tags'; value = (($Tags | Sort-Object) -join '; ') })
+    Invoke-AdoRest -OrgUrl $OrgUrl -Path "$Project/_apis/wit/workitems/$Id" `
+        -Method 'PATCH' -Body $ops -ContentType 'application/json-patch+json' | Out-Null
 }
 
 # ─── Bulk read helpers (used by audit) ───────────────────────────────────────

@@ -61,7 +61,7 @@ Describe 'Compile stage' {
         $script:resolved.areaPaths.path | Should -Contain '\Odyssey'
     }
 
-    It 'registers all three Portal bands from sections' {
+    It 'registers all three Portal structural nodes from sections' {
         $script:resolved.areaPaths.path | Should -Contain '\Odyssey\Portal\Platform'
         $script:resolved.areaPaths.path | Should -Contain '\Odyssey\Portal\Plugins'
         $script:resolved.areaPaths.path | Should -Contain '\Odyssey\Portal\Platform Engineering'
@@ -247,6 +247,101 @@ Describe 'Compile stage' {
         $fnd.paths | Should -Not -Contain '\Odyssey\Portal\Plugins\Plugin A'
     }
 
+    It 'stamps the bug-inbox Inbox area under every Platform domain team' {
+        foreach ($domain in @('Graphics Pipeline', 'Foundation', 'Geometry Library', 'Resource Modeling',
+                              'Stream Modeling', 'Connected Framework', 'Rendering Engine and Grids', 'Runtime Geometry')) {
+            $inbox = $script:resolved.areaPaths | Where-Object path -eq "\Odyssey\Portal\Platform\$domain\Inbox"
+            $inbox | Should -Not -BeNullOrEmpty -Because "$domain applies the bug-inbox system"
+            $inbox.kind   | Should -Be 'system'
+            $inbox.system | Should -Be 'bug-inbox'
+        }
+    }
+
+    It 'surfaces a system area on the owning team board only' {
+        $fnd = $script:resolved.teams | Where-Object short -eq 'FND'
+        ($fnd.areaConfig | Where-Object path -eq '\Odyssey\Portal\Platform\Foundation\Inbox') | Should -Not -BeNullOrEmpty
+        ($fnd.areaConfig | Where-Object path -eq '\Odyssey\Portal\Platform\Foundation\Inbox').includeSubAreas | Should -BeFalse
+        $gpi = $script:resolved.teams | Where-Object short -eq 'GPI'
+        $gpi.areaConfig.path | Should -Not -Contain '\Odyssey\Portal\Platform\Foundation\Inbox'
+        $gpi.areaConfig.path | Should -Contain '\Odyssey\Portal\Platform\Graphics Pipeline\Inbox'
+    }
+
+    It 'creates no team and grants no authority for system areas' {
+        ($script:resolved.teams | Where-Object name -like '*Inbox*') | Should -BeNullOrEmpty
+        $fnd = $script:resolved.structuralAuthority | Where-Object group -eq 'PTL-FND-Admins'
+        $fnd.paths | Should -Not -Contain '\Odyssey\Portal\Platform\Foundation\Inbox'
+    }
+
+    Context 'systems resolution' {
+        BeforeAll {
+            $script:sysArgs = @{
+                Manifest   = @{ program = 'Demo'; org = 'demo-org' }
+                Access     = @{ teamGroups = @(@{ role = 'admin'; ado = '{key}-Admins' }); roles = @{};
+                                containerGroups = @(@{ role = 'admin'; ado = '{key}-Admins' });
+                                stakeholders = @{ accessLevel = 'stakeholder'; ado = 'S'; scope = 'org' } }
+                SourceHash = 'testhash'
+                Systems    = @{ systems = @{ 'bug-inbox' = @{ areas = @(@{ name = 'Inbox' }) } } }
+            }
+        }
+
+        It 'does not sideload a system area onto a team that already includes sub-areas' {
+            InModuleScope NKDAgility.AzureDevOps.Governance -Parameters @{ base = $script:sysArgs } {
+                param($base)
+                $a = $base.Clone()
+                $a.Source = @{ products = @(@{ name = 'Prod'; short = 'PRD'; systems = @('bug-inbox') }) }
+                $resolved = Resolve-Governance @a
+                $inbox = $resolved.areaPaths | Where-Object path -eq '\Demo\Prod\Inbox'
+                $inbox | Should -Not -BeNullOrEmpty
+                $inbox.kind | Should -Be 'system'
+                $inbox.Contains('sideload') | Should -BeFalse
+                # portfolio boards include sub-areas already — a sideload entry
+                # would duplicate the areaConfig entry and read as drift
+                $prd = $resolved.teams | Where-Object codePath -eq 'PRD'
+                @($prd.areaConfig).Count | Should -Be 1
+            }
+        }
+
+        It 'rejects an unknown system name, listing the known ones' {
+            InModuleScope NKDAgility.AzureDevOps.Governance -Parameters @{ base = $script:sysArgs } {
+                param($base)
+                $a = $base.Clone()
+                $a.Source = @{ products = @(@{ name = 'Prod'; short = 'PRD'; systems = @('bug-inbxo') }) }
+                { Resolve-Governance @a } | Should -Throw "*unknown system 'bug-inbxo'*bug-inbox*"
+            }
+        }
+
+        It 'rejects systems: on a node with no team of its own' {
+            InModuleScope NKDAgility.AzureDevOps.Governance -Parameters @{ base = $script:sysArgs } {
+                param($base)
+                $a = $base.Clone()
+                $a.Source = @{ products = @(@{ name = 'Prod'; short = 'PRD'
+                    sections = @(@{ name = 'Structure'; items = @(@{ name = 'X'; team = 'none'; systems = @('bug-inbox') }) }) }) }
+                { Resolve-Governance @a } | Should -Throw '*no team of its own*'
+            }
+        }
+
+        It 'rejects a system area that collides with an authored child of the node' {
+            InModuleScope NKDAgility.AzureDevOps.Governance -Parameters @{ base = $script:sysArgs } {
+                param($base)
+                $a = $base.Clone()
+                $a.Source = @{ products = @(@{ name = 'Prod'; short = 'PRD'
+                    sections = @(@{ name = 'Structure'; items = @(@{ name = 'T'; short = 'T'; systems = @('bug-inbox')
+                        teams = @(@{ name = 'Inbox'; short = 'INB' }) }) }) }) }
+                { Resolve-Governance @a } | Should -Throw "*area 'Inbox' collides*"
+            }
+        }
+
+        It 'rejects an unknown key in a system definition rather than ignoring it' {
+            InModuleScope NKDAgility.AzureDevOps.Governance -Parameters @{ base = $script:sysArgs } {
+                param($base)
+                $a = $base.Clone()
+                $a.Systems = @{ systems = @{ 'bug-inbox' = @{ area = @('Inbox') } } }
+                $a.Source  = @{ products = @() }
+                { Resolve-Governance @a } | Should -Throw "*unknown key 'area'*"
+            }
+        }
+    }
+
     It 'resolves teamAdmins from the members file (Team Administrator role)' {
         $gpi = $script:resolved.teams | Where-Object short -eq 'GPI'
         @($gpi.teamAdmins).Count | Should -Be 1
@@ -263,7 +358,7 @@ Describe 'Compile stage' {
         InModuleScope NKDAgility.AzureDevOps.Governance {
             { Resolve-Governance -Manifest @{ program = 'Demo'; org = 'demo' } `
                 -Source @{ products = @(@{ name = 'P'; short = 'P'; dpm = 1
-                    sections = @(@{ name = 'Band'; items = @(@{ name = 'X'; owner = 'P-Y' }) }) }) } `
+                    sections = @(@{ name = 'Structure'; items = @(@{ name = 'X'; owner = 'P-Y' }) }) }) } `
                 -Access @{ teamGroups = @(); containerGroups = @(); roles = @{};
                            stakeholders = @{ accessLevel = 'stakeholder'; ado = 'D-S'; scope = 'org' } } `
                 -SourceHash 'x' } | Should -Throw "*'owner:', which has been removed*"
@@ -303,10 +398,76 @@ Describe 'Compile stage' {
         }
     }
 
-    It 'resolves the governed tag taxonomy from hierarchy.yaml' {
+    It 'resolves the governed tag taxonomy from taxonomy.yaml' {
         $script:resolved.tags | Should -Not -BeNullOrEmpty
         $script:resolved.tags.sanctioned | Should -Contain 'Open API'
         @($script:resolved.tags.disallowedPatterns).Count | Should -BeGreaterThan 0
+    }
+
+    It 'resolves the tag anchor with defaults filled in' {
+        $script:resolved.tags.anchor                | Should -Not -BeNullOrEmpty
+        $script:resolved.tags.anchor.enabled        | Should -BeTrue
+        $script:resolved.tags.anchor.workItemType   | Should -Be 'Task'
+        $script:resolved.tags.anchor.title          | Should -Be '[Governance] Tag taxonomy anchor - do not delete'
+    }
+
+    Context 'tag taxonomy resolution' {
+        BeforeAll {
+            $script:baseArgs = @{
+                Manifest   = @{ program = 'Demo'; org = 'demo-org' }
+                Source     = @{ products = @(@{ name = 'Prod'; short = 'PRD' }) }
+                Access     = @{ teamGroups = @(); roles = @{};
+                                containerGroups = @(@{ role = 'reader'; ado = '{key}-Readers' });
+                                stakeholders = @{ accessLevel = 'stakeholder'; ado = 'S'; scope = 'org' } }
+                SourceHash = 'testhash'
+                Members    = @{ PRD  = @{ reader = @(@{ upn = 'a@corp.com'; reason = 'x' }) }
+                                Demo = @{ reader = @(@{ upn = 'a@corp.com'; reason = 'x' }) } }
+            }
+        }
+
+        It 'fails the build when tags: is left behind in hierarchy.yaml' {
+            InModuleScope NKDAgility.AzureDevOps.Governance -Parameters @{ base = $script:baseArgs } {
+                param($base)
+                $a = $base.Clone()
+                $a.Source = @{ products = @(@{ name = 'Prod'; short = 'PRD' })
+                               tags = @{ sanctioned = @('Inbox') } }
+                { Resolve-Governance @a } | Should -Throw '*has moved to taxonomy.yaml*'
+            }
+        }
+
+        It 'omits the tags block entirely when there is no taxonomy.yaml' {
+            InModuleScope NKDAgility.AzureDevOps.Governance -Parameters @{ base = $script:baseArgs } {
+                param($base)
+                (Resolve-Governance @base).tags | Should -BeNullOrEmpty
+            }
+        }
+
+        It 'allows the anchor to be disabled' {
+            InModuleScope NKDAgility.AzureDevOps.Governance -Parameters @{ base = $script:baseArgs } {
+                param($base)
+                $a = $base.Clone()
+                $a.Taxonomy = @{ tags = @{ sanctioned = @('Inbox'); anchor = @{ enabled = $false } } }
+                (Resolve-Governance @a).tags.anchor.enabled | Should -BeFalse
+            }
+        }
+
+        It 'rejects an unknown anchor key rather than ignoring it' {
+            InModuleScope NKDAgility.AzureDevOps.Governance -Parameters @{ base = $script:baseArgs } {
+                param($base)
+                $a = $base.Clone()
+                $a.Taxonomy = @{ tags = @{ sanctioned = @('Inbox'); anchor = @{ workItemTyp = 'Task' } } }
+                { Resolve-Governance @a } | Should -Throw "*unknown key 'workItemTyp'*"
+            }
+        }
+
+        It 'rejects an empty workItemType on an enabled anchor' {
+            InModuleScope NKDAgility.AzureDevOps.Governance -Parameters @{ base = $script:baseArgs } {
+                param($base)
+                $a = $base.Clone()
+                $a.Taxonomy = @{ tags = @{ sanctioned = @('Inbox'); anchor = @{ workItemType = '' } } }
+                { Resolve-Governance @a } | Should -Throw '*workItemType*'
+            }
+        }
     }
 
     It 'generates iteration paths from cadence.yaml' {

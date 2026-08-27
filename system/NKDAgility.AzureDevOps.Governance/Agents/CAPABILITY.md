@@ -20,8 +20,13 @@ organisation, and reconciled.
   `Invoke-GovernanceApply` unprompted; run `-WhatIf` first and have the change set read
   before it goes through. `-Prune` removes things that exist live but are not authored —
   treat it as separately destructive.
-- **Programs are seed files.** `hierarchy.yaml`, `access.yaml`, `members/` and
-  `manifest.yaml` are authored by the engagement and never overwritten by tooling.
+- **Programs are seed files.** `hierarchy.yaml`, `access.yaml`, `taxonomy.yaml`,
+  `systems.yaml`, `members/` and `manifest.yaml` are authored by the engagement and never
+  overwritten by tooling.
+- **`apply` writes one work item.** When `taxonomy.yaml` declares a tag vocabulary, apply
+  maintains a governance-owned anchor work item holding the sanctioned tags. Azure DevOps
+  has no create-tag API and purges tags no work item references, so this is the only way
+  to make a sanctioned tag exist. It is the engine's only work item write.
 - **`manifest.yaml` names an environment variable, never a token.** Secrets live in the
   workspace `secrets/secrets.json` and are exported before this capability loads. Never
   write a PAT into a program file — they are committed.

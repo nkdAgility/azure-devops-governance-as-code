@@ -148,13 +148,32 @@ This is not a provisioning helper that creates missing things and moves on. It i
 - **team** (`portfolio`/`structural`/`delivery`) — real ADO team.
 - **sideload** — `sideload: <code>` (or a list): **area-path visibility ONLY** — the path joins the listed teams' boards and nothing else. Zero security: structural authority always stays with a team's home area. A node with `sideload:` **and** an explicit `type:` is both: its own team, plus board visibility for the listed teams. (`owner:` has been **removed** — using it fails the build with a migration hint.)
 - **area** — `team: none`: governed structure attached to nothing.
-- Product `sections` are free-form: `- name: <display name>` / `items: [...]` — any number of bands, any characters in names.
+- Product `sections` are free-form: `- name: <display name>` / `items: [...]` — any number of structural nodes, any characters in names.
 - Team security is expressed only via `access.yaml` roles, `members/<code>.yaml`, and home-area structural authority — never via area-path attachment.
+
+### Systems (reusable team sub-elements)
+Declared in `programs/<name>/systems.yaml`; applied per node with `systems: [<name>, ...]` in `hierarchy.yaml` (team nodes and products only — a node with no team of its own fails the build, as does an unknown system name or an area colliding with an authored child).
+
+- A system is a named set of governed sub-elements stamped onto the applying team. v1 grammar per system: `areas:` — child area paths under the team's **home** area (e.g. `bug-inbox` puts `…\Foundation\Inbox` under Foundation). Names are fixed by the definition, so the convention is uniform across every team that applies it.
+- The areas surface on the team's **own board**: sideloaded automatically when the team's type has `includeSubAreas: false` (delivery); teams that already include sub-areas see them without a sideload entry (adding one would duplicate the `areaConfig` entry and read as drift).
+- **Zero security**: no new team, no groups, no members file — structural authority stays with the team's home area.
+- Resolved area entries carry `kind: system` plus the system name; compliance is the ordinary area-path + `areaConfig` exact match, so plan/apply/audit need no special handling.
 
 ### Pipeline folders
 - Every folder in `resolved.pipelineFolders` exists.
 - Each folder's **ACL** matches the resolved `acl` list — wrong permissions and extra ACEs are both findings.
 - Pipeline folders are **opt-in**: a node (team or product) only gets one when it declares `pipelineFolder: true` in `hierarchy.yaml` — meaning it has builds of its own. No flag → no folder, no ACL.
+
+### Tags (governed vocabulary)
+Declared in `programs/<name>/taxonomy.yaml`, not `hierarchy.yaml` — a flat list of allowed strings is not part of the product/team tree. A `tags:` block left behind in `hierarchy.yaml` **fails the build** with a migration hint.
+
+- Every tag in `tags.sanctioned` **exists** in the project. A sanctioned tag that does not exist is a `MISSING tag` finding.
+- Tags matching `tags.disallowedPatterns` (build-id-shaped noise) are **always** drift, checked before the sanctioned list.
+- Tags that are neither sanctioned nor disallowed are audit exceptions.
+
+**Making a tag exist (ADR-006).** ADO has no create-tag API — `POST /_apis/wit/tags` returns 405 — and it purges tags that no work item references. So `apply` maintains one governance-owned **anchor work item** per project whose tag set is exactly the sanctioned vocabulary. That is the only mechanism ADO offers. The anchor is found by WIQL on its title (no state file, no duplicates) and its tag set is corrected in place (ADR-003) — exactly the sanctioned set, no more, no less. A de-sanctioned tag left on the anchor would immediately read as an audit exception and be deleted by `-Prune` out from under it.
+
+Configure under `tags.anchor`: `enabled` (default true), `workItemType` (default `Task`, validated against the project's process), `title`, `areaPath`, `state`. Set `enabled: false` to audit only — missing tags are still reported, and the finding says apply cannot fix them.
 
 ---
 
@@ -182,6 +201,24 @@ Products marked `scope: future` in `hierarchy.yaml` are **invisible to apply and
 
 ---
 
+## Working on a client program
+
+This repo holds no client config. When a task concerns a live program, the
+authored state and the reasoning behind it live in the client repo — typically
+`NKDAClient-<client>/governance/`, passed in via `-ProgramsRoot`.
+
+**Nothing there loads automatically when you are working from this repo.** Before
+assessing, restructuring, or explaining a client's hierarchy, read:
+
+| In the client repo | What it gives you |
+|---|---|
+| `governance/CLAUDE.md` (→ `.agents/agents.md`) | program-specific conventions and current state |
+| `governance/.agents/plans/*.md` | the record of intent — requirements, decisions, open questions |
+| `CLAUDE.md` (repo root) | customer context, auth, CI |
+
+Assessing a client setup without reading its plan means assessing it against a
+guess. The client's own `.agents/` folder is the record; this file is not.
+
 ## Source layout
 
 ```
@@ -190,8 +227,11 @@ programs/            # empty by default — client programs live in client repos
                      # to build.ps1 via -ProgramsRoot. A program folder holds:
   <name>/
     manifest.yaml    # org + accessToken reference + project declaration
-    hierarchy.yaml   # authored product/team/band tree
+    hierarchy.yaml   # authored product/structural/team tree
     access.yaml      # role definitions + group naming conventions
+    taxonomy.yaml    # governed vocabularies (tags) — optional
+    systems.yaml     # reusable team systems (e.g. bug-inbox) — optional
+    cadence.yaml     # iteration cadence — optional
     members/         # <codeKey>.yaml — desired group membership
 
 tests/fixtures/programs/  # frozen program snapshot — compile-test data only
@@ -238,6 +278,7 @@ Key decisions are recorded in `.agents/decisions/`. Read these before making str
 | [ADR-002](decisions/ADR-002-targeted-rest-checks.md) | Targeted REST checks over bulk fetches — bulk `az boards area project list` causes OOM on large projects |
 | [ADR-003](decisions/ADR-003-apply-is-corrective.md) | Apply is corrective, not just additive — existing but misconfigured resources must be patched |
 | [ADR-005](decisions/ADR-005-iteration-compliance-rule.md) | Old governance iterations are compliant by definition — only check desired paths exist, never flag old sprints |
+| [ADR-006](decisions/ADR-006-tag-anchor-work-item.md) | Sanctioned tags are made to exist via an anchor work item — ADO has no create-tag API and purges unreferenced tags |
 
 ---
 

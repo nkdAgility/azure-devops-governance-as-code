@@ -12,7 +12,7 @@ A program folder contains:
 ```
 <name>/
   manifest.yaml    # program identity + org + accessToken $Env: reference
-  hierarchy.yaml   # authored product/team/band tree
+  hierarchy.yaml   # authored product/structural/team tree
   access.yaml      # role definitions + group naming conventions
   cadence.yaml     # iteration cadence + scope defaults
   members/         # <codeKey>.yaml — desired group membership

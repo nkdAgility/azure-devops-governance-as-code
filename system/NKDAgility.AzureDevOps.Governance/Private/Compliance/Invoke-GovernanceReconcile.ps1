@@ -1022,18 +1022,88 @@ function Invoke-GovernanceReconcile {
         }
     }
 
-    # ── 7. Tags — governed taxonomy (Decision-0041) ───────────────────────────
+    # ── 7. Tags — governed taxonomy (Decision-0041, ADR-006) ──────────────────
     # Disallowed patterns (build-id shaped) are ALWAYS drift; tags outside the
-    # sanctioned vocabulary are audit exceptions. Sanctioned tags cannot be
-    # pre-created (ADO purges unused tags) so their absence is not a finding.
+    # sanctioned vocabulary are audit exceptions; sanctioned tags that do not
+    # exist are MISSING. ADO has no create-tag API and purges tags no work item
+    # references, so apply makes a sanctioned tag exist the only way ADO allows:
+    # by holding the whole vocabulary on one governed anchor work item.
     if ($Resolved.tags) {
         Write-Host "`n--- Tags ---" -ForegroundColor Cyan
         try {
             $liveTags   = Get-AdoTagSet -OrgUrl $OrgUrl -Project $project
+            $sanctionedList = @($Resolved.tags.sanctioned)
             $sanctioned = [System.Collections.Generic.HashSet[string]]::new(
-                [string[]]@($Resolved.tags.sanctioned), [System.StringComparer]::OrdinalIgnoreCase)
+                [string[]]$sanctionedList, [System.StringComparer]::OrdinalIgnoreCase)
             $patterns = @($Resolved.tags.disallowedPatterns)
             $okCount  = 0
+
+            # ── 7a. Anchor: make the sanctioned vocabulary exist ──────────────
+            # A resolved.yaml built before ADR-006 has no anchor block; treat that
+            # as disabled rather than writing a work item off a stale model.
+            $anchor  = $Resolved.tags.anchor
+            $seeding = ($anchor -and $anchor.enabled -and $sanctionedList.Count -gt 0)
+            $missing = @($sanctionedList | Where-Object { -not $liveTags.ContainsKey($_) })
+
+            if ($seeding -and ($missing.Count -gt 0 -or $doFix)) {
+                if ($doFix) {
+                    try {
+                        $wiTypes = Get-AdoWorkItemTypeName -OrgUrl $OrgUrl -Project $project
+                        if ($anchor.workItemType -notin $wiTypes) {
+                            throw ("work item type '$($anchor.workItemType)' does not exist in '$project'. " +
+                                   "Set taxonomy.yaml tags.anchor.workItemType to one of: $($wiTypes -join ', ')")
+                        }
+                        $anchorId = Find-AdoTagAnchor -OrgUrl $OrgUrl -Project $project -Title $anchor.title
+                        if (-not $anchorId) {
+                            $anchorId = New-AdoTagAnchor -OrgUrl $OrgUrl -Project $project `
+                                -Title $anchor.title -WorkItemType $anchor.workItemType `
+                                -Tags $sanctionedList -AreaPath $anchor.areaPath -State $anchor.state
+                            & $rCreated "tag anchor: work item #$anchorId"
+                            foreach ($t in ($missing | Sort-Object)) { & $rCreated "tag: $t  [seeded]" }
+                        } else {
+                            # Corrective (ADR-003): the anchor must carry exactly the
+                            # sanctioned set — no more (extras would read as orphan
+                            # tags), no less (gaps would read as missing tags).
+                            # HashSet, not Compare-Object: Compare-Object rejects an
+                            # empty -ReferenceObject, and an anchor stripped of its
+                            # tags is exactly the case that most needs correcting.
+                            $onAnchor = [System.Collections.Generic.HashSet[string]]::new(
+                                [string[]]@(Get-AdoWorkItemTag -OrgUrl $OrgUrl -Project $project -Id $anchorId),
+                                [System.StringComparer]::OrdinalIgnoreCase)
+                            if (-not $onAnchor.SetEquals([string[]]$sanctionedList)) {
+                                Set-AdoTagAnchorTag -OrgUrl $OrgUrl -Project $project -Id $anchorId -Tags $sanctionedList
+                                & $rFixed "tag anchor: work item #$anchorId"
+                                foreach ($t in ($missing | Sort-Object)) { & $rCreated "tag: $t  [seeded]" }
+                            } else {
+                                & $rOk "tag anchor: work item #$anchorId"
+                            }
+                        }
+                        # Re-read: seeding changed the live vocabulary.
+                        $liveTags = Get-AdoTagSet -OrgUrl $OrgUrl -Project $project
+                        $missing  = @($sanctionedList | Where-Object { -not $liveTags.ContainsKey($_) })
+                        foreach ($t in ($missing | Sort-Object)) {
+                            $findings.Add("MISSING tag: $t (still absent after seeding the anchor work item)")
+                            & $rMissing "tag: $t"
+                        }
+                    } catch {
+                        $findings.Add("ERROR seeding tag anchor: $_")
+                        & $rError "seed tag anchor: $_"
+                    }
+                } else {
+                    foreach ($t in ($missing | Sort-Object)) {
+                        $findings.Add("MISSING tag: $t (sanctioned but not in use)")
+                        if ($Mode -eq 'WhatIf') { & $rWould "seed tag: $t (via anchor work item)" }
+                        else                     { & $rMissing "tag: $t (sanctioned but not in use)" }
+                    }
+                }
+            } elseif ($missing.Count -gt 0) {
+                # Seeding disabled: report, and say plainly that apply cannot fix it.
+                $why = if ($anchor) { 'tags.anchor.enabled is false' } else { 'resolved.yaml predates the tag anchor — rebuild' }
+                foreach ($t in ($missing | Sort-Object)) {
+                    $findings.Add("MISSING tag: $t (sanctioned but not in use; apply cannot create it — $why)")
+                    & $rMissing "tag: $t (sanctioned but not in use)"
+                }
+            }
 
             foreach ($tagName in ($liveTags.Keys | Sort-Object)) {
                 $disallowed = $false
@@ -1070,7 +1140,12 @@ function Invoke-GovernanceReconcile {
                 } else { $okCount++ }
             }
             Write-Host "  [ok]      $okCount sanctioned tag(s) in use ($($liveTags.Count) live total)" -ForegroundColor Green
-        } catch { & $rError "read tags: $_" }
+        } catch {
+            # A read failure means the taxonomy was never checked — that must be a
+            # finding, not just a console line, or the run reports a false green.
+            $findings.Add("ERROR reading tags: $_")
+            & $rError "read tags: $_"
+        }
     }
 
     # ── Findings summary ──────────────────────────────────────────────────────

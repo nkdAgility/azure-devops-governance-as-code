@@ -2,8 +2,8 @@ function Import-GovernanceSource {
     <#
         .SYNOPSIS
         Loads and parses a program's authored governance source (hierarchy +
-        access + members) from its programs/<program>/ folder, returning the raw
-        model plus a source hash for provenance.
+        access + members + taxonomy + systems) from its programs/<program>/ folder,
+        returning the raw model plus a source hash for provenance.
     #>
     [CmdletBinding()]
     param(
@@ -38,7 +38,28 @@ function Import-GovernanceSource {
         }
     }
 
-    $bytes  = [System.Text.Encoding]::UTF8.GetBytes($manifestRaw + $hierarchyRaw + $accessRaw + $membersRaw)
+    # taxonomy.yaml: optional governed vocabularies (tags today; other controlled
+    # value lists later). Separate from hierarchy.yaml because it is a flat list
+    # of allowed strings, not part of the product/team tree.
+    $taxonomyPath = Join-Path $ProgramPath 'taxonomy.yaml'
+    $taxonomyRaw  = ''
+    $taxonomy     = $null
+    if (Test-Path $taxonomyPath) {
+        $taxonomyRaw = Get-Content -Path $taxonomyPath -Raw
+        $taxonomy    = ConvertFrom-Yaml $taxonomyRaw
+    }
+
+    # systems.yaml: optional reusable systems — named sets of governed
+    # sub-elements stamped onto teams via `systems:` in hierarchy.yaml.
+    $systemsPath = Join-Path $ProgramPath 'systems.yaml'
+    $systemsRaw  = ''
+    $systems     = $null
+    if (Test-Path $systemsPath) {
+        $systemsRaw = Get-Content -Path $systemsPath -Raw
+        $systems    = ConvertFrom-Yaml $systemsRaw
+    }
+
+    $bytes  = [System.Text.Encoding]::UTF8.GetBytes($manifestRaw + $hierarchyRaw + $accessRaw + $membersRaw + $taxonomyRaw + $systemsRaw)
     $stream = [System.IO.MemoryStream]::new($bytes)
     $hash   = (Get-FileHash -InputStream $stream -Algorithm SHA256).Hash.ToLowerInvariant()
 
@@ -67,6 +88,8 @@ function Import-GovernanceSource {
         Members      = $members
         Hash         = $hash
         Cadence      = $cadence
+        Taxonomy     = $taxonomy
+        Systems      = $systems
         TeamIds      = $teamIds
         TeamIdsPath  = $teamIdsPath
     }

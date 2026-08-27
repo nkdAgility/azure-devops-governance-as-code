@@ -55,6 +55,89 @@ function Get-TeamTypeDefs {
     return $defs
 }
 
+function Get-SystemDefs {
+    <# Normalizes the optional systems.yaml `systems:` map. A system is a named,
+       reusable set of governed sub-elements stamped onto a team via `systems:`
+       in hierarchy.yaml. v1 supports `areas:` — child area paths under the
+       team's home area, surfaced on the team's own board (visibility only,
+       zero security). Unknown keys throw: config errors must fail the build. #>
+    [CmdletBinding()]
+    param([object]$Systems)
+
+    $defs = @{}
+    if (-not $Systems -or -not $Systems.systems) { return $defs }
+    foreach ($name in @($Systems.systems.Keys)) {
+        $spec = $Systems.systems[$name]
+        if (-not $spec) { throw "systems.yaml: system '$name' is empty." }
+        foreach ($key in @($spec.Keys)) {
+            if ($key -ne 'areas') {
+                throw "systems.yaml: system '$name' has unknown key '$key' (expected: areas)."
+            }
+        }
+        $areas = [System.Collections.Generic.List[string]]::new()
+        foreach ($entry in @($spec.areas | Where-Object { $_ })) {
+            $areaName = if ($entry -is [string]) { $entry } else {
+                foreach ($key in @($entry.Keys)) {
+                    if ($key -ne 'name') {
+                        throw "systems.yaml: system '$name' area entry has unknown key '$key' (expected: name)."
+                    }
+                }
+                [string]$entry.name
+            }
+            if ([string]::IsNullOrWhiteSpace($areaName)) {
+                throw "systems.yaml: system '$name' has an area entry without a name."
+            }
+            $areas.Add($areaName.Trim())
+        }
+        if ($areas.Count -eq 0) { throw "systems.yaml: system '$name' declares no areas." }
+        $defs[$name] = @{ areas = @($areas) }
+    }
+    return $defs
+}
+
+function Add-NodeSystems {
+    <# Expands a team node's `systems:` list. Each named system stamps its child
+       areas under the team's HOME area and — for teams that do not already see
+       sub-areas (includeSubAreas false) — sideloads them onto the team's own
+       board. Board visibility only: structural authority stays with the home
+       area, no new team, no groups, no members file. #>
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)][hashtable]$Ctx,
+        [Parameter(Mandatory)]$Node,
+        [Parameter(Mandatory)][string]$Path,
+        [Parameter(Mandatory)][string]$CodePath,
+        [Parameter(Mandatory)][bool]$IncludeSubAreas,
+        [AllowEmptyCollection()][string[]]$ReservedNames = @(),
+        [AllowNull()][AllowEmptyString()][string]$Scope
+    )
+    $seen = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::OrdinalIgnoreCase)
+    foreach ($r in $ReservedNames) { [void]$seen.Add($r) }
+    foreach ($sysName in @(Get-NodeKeyList $Node.systems)) {
+        if (-not $Ctx.SystemDefs.ContainsKey($sysName)) {
+            $known = if ($Ctx.SystemDefs.Count -gt 0) { $Ctx.SystemDefs.Keys -join ', ' } else { 'none - add a systems.yaml' }
+            throw "hierarchy.yaml: node '$($Node.name)' applies unknown system '$sysName' (known systems: $known)."
+        }
+        foreach ($areaName in $Ctx.SystemDefs[$sysName].areas) {
+            if (-not $seen.Add($areaName)) {
+                throw "hierarchy.yaml: node '$($Node.name)': system '$sysName' area '$areaName' collides with an existing child of the node."
+            }
+            $childPath = "$Path\$areaName"
+            $area = [ordered]@{ path = $childPath; kind = 'system'; system = $sysName }
+            if ($Scope) { $area.scope = $Scope }
+            if (-not $IncludeSubAreas) {
+                # The team's board does not include sub-areas, so the system
+                # area must be sideloaded onto it explicitly. Teams that DO
+                # include sub-areas already see it — a sideload entry there
+                # would duplicate the areaConfig entry and read as drift.
+                $area.sideload = @($CodePath)
+                Add-SideloadEntry -Ctx $Ctx -Key $CodePath -Path $childPath -IncludeSubAreas $false
+            }
+            $Ctx.AreaPaths.Add($area)
+        }
+    }
+}
+
 function Add-SideloadEntry {
     <# Records that a node's area path is SIDELOADED onto a team's board —
        area path visibility ONLY, no structural authority. #>
@@ -149,7 +232,7 @@ function Add-NodeRepos {
 }
 
 function Add-TeamNode {
-    <# Recursively projects a team node (and its nested sub-teams) under a band.
+    <# Recursively projects a team node (and its nested sub-teams) under a structural node.
        Only first-level teams get a pipeline folder; sub-teams share the parent's. #>
     [CmdletBinding()]
     param(
@@ -185,6 +268,12 @@ function Add-TeamNode {
 
     # Repo ownership: the node's own team, else its first sideloader.
     $nodeCode = if ($Node.short) { $codePath } else { $null }
+
+    # systems attach sub-elements to a team's own board — a node with no team
+    # of its own has no board for them to land on.
+    if (@(Get-NodeKeyList $Node.systems).Count -gt 0 -and ($isTeamless -or $isAreaOnly)) {
+        throw "hierarchy.yaml: node '$($Node.name)' applies systems: but has no team of its own - systems attach to a team's board."
+    }
 
     if ($isTeamless) {
         # Governed structure attached to nothing — no team, no consumer.
@@ -227,11 +316,55 @@ function Add-TeamNode {
         # path on their boards (board scope only, never authority).
         foreach ($s in $sideloaders) { Add-SideloadEntry -Ctx $Ctx -Key $s -Path $path -IncludeSubAreas $hasChildren }
         Add-NodeRepos -Ctx $Ctx -Node $Node -Path $path -OwnerKey $codePath -NodeCode $codePath
+        Add-NodeSystems -Ctx $Ctx -Node $Node -Path $path -CodePath $codePath `
+            -IncludeSubAreas $typeDef.includeSubAreas -ReservedNames @($children | ForEach-Object { [string]$_.name })
     }
 
     foreach ($child in $children) {
         Add-TeamNode -Node $child -ParentPath $path -ParentTeamName $qualifiedName -QualifiedParentName $qualifiedName -ParentCodePath $codePath -IsFirstLevel $false -ProgramRoot $ProgramRoot -Ctx $Ctx
     }
+}
+
+# Default identity of the tag anchor work item. ADO has no create-tag API
+# (POST /_apis/wit/tags returns 405) and purges tags that no work item
+# references, so the ONLY way to make a sanctioned tag exist is to hold it on a
+# work item. Apply maintains exactly one such item per project (ADR-006).
+# Plain ASCII in the title: it round-trips through a WIQL string literal.
+$script:TagAnchorDefaults = @{
+    enabled      = $true
+    title        = '[Governance] Tag taxonomy anchor - do not delete'
+    workItemType = 'Task'
+    areaPath     = ''   # empty = project root
+    state        = ''   # empty = process default for a new work item
+}
+
+function Resolve-TagAnchor {
+    <# Normalizes the optional taxonomy.yaml `tags.anchor` block over the
+       built-in defaults. Config errors fail the build — a typo here would
+       otherwise surface mid-apply against a live project. #>
+    [CmdletBinding()]
+    param([object]$Anchor)
+
+    $out = [ordered]@{}
+    foreach ($k in @('enabled', 'title', 'workItemType', 'areaPath', 'state')) {
+        $out[$k] = $script:TagAnchorDefaults[$k]
+    }
+    if (-not $Anchor) { return $out }
+
+    foreach ($key in @($Anchor.Keys)) {
+        if ($key -notin $out.Keys) {
+            throw "taxonomy.yaml tags.anchor: unknown key '$key' (expected one of: $($out.Keys -join ', '))."
+        }
+    }
+    if ($null -ne $Anchor.enabled) { $out['enabled'] = [bool]$Anchor.enabled }
+    foreach ($key in @('title', 'workItemType', 'areaPath', 'state')) {
+        if ($null -ne $Anchor.$key) { $out[$key] = [string]$Anchor.$key }
+    }
+    if ($out['enabled']) {
+        if ([string]::IsNullOrWhiteSpace($out['title']))        { throw "taxonomy.yaml tags.anchor.title: must not be empty." }
+        if ([string]::IsNullOrWhiteSpace($out['workItemType'])) { throw "taxonomy.yaml tags.anchor.workItemType: must not be empty." }
+    }
+    return $out
 }
 
 function Resolve-Governance {
@@ -247,7 +380,9 @@ function Resolve-Governance {
         [Parameter(Mandatory)][object]$Access,
         [Parameter(Mandatory)][string]$SourceHash,
         [hashtable]$Members = @{},
-        [object]$Cadence    = $null   # optional cadence.yaml content for iteration generation
+        [object]$Cadence    = $null,  # optional cadence.yaml content for iteration generation
+        [object]$Taxonomy   = $null,  # optional taxonomy.yaml content for governed vocabularies
+        [object]$Systems    = $null   # optional systems.yaml content for reusable team systems
     )
 
     $typeDefs     = Get-TeamTypeDefs -Cadence $Cadence
@@ -260,6 +395,7 @@ function Resolve-Governance {
         PipelineFolders = [System.Collections.Generic.List[object]]::new()
         Sideloaded      = @{}   # code -> paths SIDELOADED onto that team (board only, zero security)
         TypeDefs        = $typeDefs
+        SystemDefs      = Get-SystemDefs -Systems $Systems
     }
 
     $program = $Manifest.program
@@ -290,6 +426,10 @@ function Resolve-Governance {
         $isTeamless     = ("$($product.team)" -eq 'none')
         # sideload WITHOUT an explicit type = area only; WITH a type = team too.
         $isAreaOnly     = (-not $isTeamless) -and $sideloaders.Count -gt 0 -and -not $product.type
+
+        if (@(Get-NodeKeyList $product.systems).Count -gt 0 -and ($isTeamless -or $isAreaOnly)) {
+            throw "hierarchy.yaml: product '$($product.name)' applies systems: but has no team of its own - systems attach to a team's board."
+        }
 
         $kind = if ($isTeamless) { 'area' } elseif ($isAreaOnly) { 'sideload' } else { 'product' }
         $area = [ordered]@{ path = $productPath; kind = $kind }
@@ -327,24 +467,27 @@ function Resolve-Governance {
             $ctx.Teams.Add($teamObj)
             foreach ($s in $sideloaders) { Add-SideloadEntry -Ctx $ctx -Key $s -Path $productPath -IncludeSubAreas $true }
             Add-NodeRepos -Ctx $ctx -Node $product -Path $productPath -OwnerKey $product.short -NodeCode $product.short
+            Add-NodeSystems -Ctx $ctx -Node $product -Path $productPath -CodePath $product.short `
+                -IncludeSubAreas $portfolioDef.includeSubAreas -Scope $product.scope `
+                -ReservedNames @(@($product.sections | Where-Object { $null -ne $_ }) | ForEach-Object { [string]$_.name })
         }
 
-        # Free-form bands: each section is { name: <display name>, items: [...] }.
+        # Free-form structural nodes: each section is { name: <display name>, items: [...] }.
         # Display names may contain any characters (parentheses etc.). Items are
-        # teams, sideload: areas, or team: none placeholders — all band-agnostic.
+        # teams, sideload: areas, or team: none placeholders — all structure-agnostic.
         foreach ($section in @($product.sections | Where-Object { $null -ne $_ })) {
             if ($section -is [string]) {
                 throw "hierarchy.yaml: product '$($product.name)' uses the legacy section keyword '$section'. Sections are now objects: - name: <display name> / items: [...]."
             }
-            $bandName = [string]$section.name
-            if (-not $bandName) {
+            $structuralName = [string]$section.name
+            if (-not $structuralName) {
                 throw "hierarchy.yaml: product '$($product.name)' has a section without a name."
             }
-            $bandPath = "$productPath\$bandName"
-            $ctx.AreaPaths.Add([ordered]@{ path = $bandPath; kind = 'band' })
+            $structuralPath = "$productPath\$structuralName"
+            $ctx.AreaPaths.Add([ordered]@{ path = $structuralPath; kind = 'structural' })
 
             foreach ($node in @($section.items | Where-Object { $null -ne $_ })) {
-                Add-TeamNode -Node $node -ParentPath $bandPath -ParentTeamName $product.name -QualifiedParentName $product.name -ParentCodePath $product.short -IsFirstLevel $true -ProgramRoot $root -Ctx $ctx
+                Add-TeamNode -Node $node -ParentPath $structuralPath -ParentTeamName $product.name -QualifiedParentName $product.name -ParentCodePath $product.short -IsFirstLevel $true -ProgramRoot $root -Ctx $ctx
             }
         }
     }
@@ -481,13 +624,22 @@ function Resolve-Governance {
         }
     }
 
-    # Governed tag taxonomy (optional — hierarchy.yaml `tags:` block).
+    # Governed tag taxonomy (optional — taxonomy.yaml `tags:` block).
     # Decision-0041: everything that is not a team becomes a tag, so the
     # sanctioned vocabulary is structural config, not free-form user data.
+    # The taxonomy moved out of hierarchy.yaml — a flat list of allowed strings
+    # is not part of the product/team tree. Fail loudly rather than silently
+    # ignoring a taxonomy left behind in the old location.
     if ($Source.tags) {
+        throw ("hierarchy.yaml: the 'tags:' block has moved to taxonomy.yaml. " +
+               "Move it to programs/<program>/taxonomy.yaml unchanged (same 'tags:' key, " +
+               "same 'sanctioned:' and 'disallowedPatterns:' lists) and remove it from hierarchy.yaml.")
+    }
+    if ($Taxonomy -and $Taxonomy.tags) {
         $resolved['tags'] = [ordered]@{
-            sanctioned         = @($Source.tags.sanctioned | Where-Object { $_ })
-            disallowedPatterns = @($Source.tags.disallowedPatterns | Where-Object { $_ })
+            sanctioned         = @($Taxonomy.tags.sanctioned | Where-Object { $_ })
+            disallowedPatterns = @($Taxonomy.tags.disallowedPatterns | Where-Object { $_ })
+            anchor             = Resolve-TagAnchor -Anchor $Taxonomy.tags.anchor
         }
     }
 

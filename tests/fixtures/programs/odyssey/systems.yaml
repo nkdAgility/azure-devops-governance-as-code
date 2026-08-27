@@ -1,0 +1,13 @@
+# programs/odyssey/systems.yaml — reusable systems stamped onto teams.
+#
+# A system is a named set of governed sub-elements applied via `systems:` on a
+# team node (or product) in hierarchy.yaml. v1 grammar per system:
+#   areas: — child area paths under the applying team's HOME area, surfaced on
+#           the team's own board (visibility only). Zero security: no new team,
+#           no groups, no members file — structural authority stays with the
+#           team's home area. Area names are fixed by the definition, so the
+#           convention is uniform across every team that applies the system.
+systems:
+  bug-inbox:
+    areas:
+      - name: Inbox   # incoming triage lands here; the team sees it on their board

@@ -1,0 +1,38 @@
+# programs/odyssey/taxonomy.yaml — governed vocabularies.
+#
+# A taxonomy is a controlled list of strings users pick from. It lives here
+# rather than in hierarchy.yaml because it is not part of the product/team tree.
+#
+# tags — the governed work item tag vocabulary (Decision-0041: everything that
+#   is not a team becomes a tag, so the vocabulary is structural config, not
+#   free-form user data).
+#     sanctioned         allowed tags. Missing ones are MISSING findings and are
+#                        seeded by apply; anything in ADO that is not listed is
+#                        an audit exception.
+#     disallowedPatterns regexes that are ALWAYS drift (build-id-shaped noise),
+#                        checked before the sanctioned list.
+#     anchor             how apply makes a sanctioned tag exist. ADO has no
+#                        create-tag API and purges tags no work item references,
+#                        so the vocabulary is held on one governed work item
+#                        (ADR-006). Defaults shown; the whole block is optional.
+tags:
+  sanctioned:
+    - Inbox
+    - Backlog
+    - Triage
+    - Priority-Bug
+    - QA-Test
+    - Sanity
+    - Research
+    - Stakeholders
+    - Open API
+    - Spike
+  disallowedPatterns:
+    - '^\d+$'             # bare build numbers
+    - '^(build|bld)[-_ ]' # build-id prefixed
+  anchor:
+    enabled:      true
+    workItemType: Task
+    # title:      '[Governance] Tag taxonomy anchor - do not delete'
+    # areaPath:   ''   # empty = project root
+    # state:      ''   # empty = process default; set e.g. Removed to keep it off boards
