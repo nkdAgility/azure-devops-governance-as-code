@@ -188,6 +188,25 @@ pwsh ./build.ps1 audit -Program myprogram -ProgramsRoot ../my-governance/governa
 > machine. `.system/.source.json` records the version, commit, and whether the
 > source was dirty. Check it before treating an audit result as authoritative.
 
+### When the requested ring has nothing
+
+Consumption mode defaults to the **production** ring, which has nothing on it
+until the first stable release. `init.ps1` does not fail the workspace over that.
+It never tears down a working engine without a replacement in hand:
+
+1. **`.system/` already has the engine** — it is kept *exactly* as it is, and its
+   `.source.json` is left untouched. The workspace keeps running what it was
+   already running, and its provenance still names whatever produced it.
+2. **Otherwise, a version is installed** — that is staged instead.
+3. **Otherwise it fails**, naming the module, the ring, what is actually
+   published, and both ways out.
+
+Step 1 deliberately beats step 2: moving a workspace onto an unrelated version
+that happens to be in the module path, because a release hasn't happened yet,
+would change what it runs without anyone asking — worse than being stale. Every
+fallback is warned about, because it means the run is not on the ring it asked
+for.
+
 ---
 
 ## Commands
