@@ -140,14 +140,52 @@ Your workspace `.gitignore` keeps the generated and secret parts out of git:
 workspace.local.json
 ```
 
-### Working on the engine itself
+---
 
-Contributors to *this* repo do clone it, and run the CLI directly against the
-bundled fixture or any program folder:
+## Two ways to run the engine
+
+There are exactly two setups, and the difference matters for whether a compliance
+run is reproducible.
+
+| | **Consumption** | **Development** |
+| --- | --- | --- |
+| Source | Published module, pinned version | A clone (yours, or a fork's) |
+| Changes propagate | On an explicit version bump | Instantly, uncommitted edits included |
+| Selected by | Default | `enginePaths.<name>` in `workspace.local.json` |
+| Reproducible | **Yes** | **No** — came from one machine's working tree |
+
+**Consumption** is the default and the only mode a scheduled audit should ever
+run in. Install it directly:
+
+```bash
+Install-Module NKDAgility.AzureDevOps.Governance -Scope CurrentUser
+```
+
+**Development** is for changing the engine, where edits have to take effect in a
+real workspace immediately — no publish step in the loop. That is why a clone,
+not a package: `init.ps1` copies the working tree, uncommitted changes and all,
+and warns you when it does. Point a workspace at your clone in
+`workspace.local.json`, which is gitignored, so the override never reaches your
+teammates or CI:
+
+```json
+{ "enginePaths": { "governance": "C:\\src\\azure-devops-governance-as-code" } }
+```
+
+Contributors work the same way against a fork — it is the development setup with
+a different remote, not a third mode. Clone the fork, point a workspace at it,
+change engine and configuration together, then open a PR.
+
+Working on the engine on its own, without a workspace, use the CLI directly:
 
 ```bash
 pwsh ./build.ps1 audit -Program myprogram -ProgramsRoot ../my-governance/governance/programs
 ```
+
+> **Provenance.** A run in development mode is not evidence of anything
+> reproducible — it came from a working tree that may exist on exactly one
+> machine. `.system/.source.json` records the version, commit, and whether the
+> source was dirty. Check it before treating an audit result as authoritative.
 
 ---
 

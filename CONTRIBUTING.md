@@ -148,6 +148,47 @@ requires user authentication` (HTTP 401). Run `doctor` whenever you see that.
 
 ---
 
+## Cutting a release
+
+The module is published to the PowerShell Gallery so consumers can pin a version.
+**The manifest is the source of truth for the version, not the tag** — a
+workspace in development mode runs the module straight out of a clone, so the
+committed `.psd1` has to state its own version truthfully. A version injected at
+build time would make every dev-mode copy lie about what it is.
+
+1. Update `ModuleVersion` in
+   `system/NKDAgility.AzureDevOps.Governance/NKDAgility.AzureDevOps.Governance.psd1`.
+   For a prerelease, also set `PrivateData.PSData.Prerelease` (e.g. `'preview1'`).
+2. Move the `Unreleased` entries in [CHANGELOG.md](CHANGELOG.md) under the new
+   version heading.
+3. Merge to `main`.
+4. Tag and push:
+
+```bash
+git tag v1.2.3 && git push origin v1.2.3
+```
+
+The release workflow runs the tests, checks the tag against the manifest, refuses
+to publish if they disagree, publishes to the Gallery, and creates the GitHub
+release. Tags are `v1.2.3` or `v1.2.3-preview1`.
+
+To rehearse without publishing, run the **Release** workflow manually with
+`dryRun` left ticked — it validates and tests but pushes nothing.
+
+Bear in mind that a published version can be unlisted but **never deleted**, and
+the package id is reserved permanently. Prefer a prerelease when in doubt.
+
+### What counts as breaking
+
+Semantic versioning here is about compliance behaviour, not just code. Treat as
+major: anything that makes `audit` report something it previously ignored, any
+YAML grammar change that invalidates an existing program, and any change to what
+`apply -Prune` considers an orphan. Each of those can turn a green compliance run
+red — or delete something it previously left alone — without a line of consumer
+code changing.
+
+---
+
 ## Reporting bugs and requesting features
 
 Open an issue using the appropriate template. For bugs, the most useful thing you
