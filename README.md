@@ -41,38 +41,112 @@ and makes every divergence from it visible and correctable.
 
 ## Quick start
 
+**You do not clone this repo to use it.** This repo is the *engine*. You create
+your own private workspace repo, declare this engine as a capability, and a
+loader materialises the module into a generated `.system/` folder. Your desired
+state stays in your repo; the engine stays in this one. Nothing is duplicated and
+nothing of yours is ever committed here.
+
 **Prerequisites**
 
 - [PowerShell 7.4+](https://github.com/PowerShell/PowerShell)
 - [Azure CLI](https://learn.microsoft.com/cli/azure/install-azure-cli) with the
   `azure-devops` extension (`az extension add --name azure-devops`)
-- The `powershell-yaml` module (`build.ps1` installs it if missing)
+- [GitHub CLI](https://cli.github.com/) for the repo-creation step
+
+### 1. Create your private workspace
 
 ```bash
-git clone https://github.com/nkdAgility/azure-devops-governance-as-code.git
-cd azure-devops-governance-as-code
+gh repo create my-org/my-governance --private --clone && cd my-governance
+```
+
+### 2. Fetch the workspace loader
+
+```bash
+curl -o init.ps1 https://raw.githubusercontent.com/nkdAgility/azure-devops-automation-tools/main/system/NKDAgility.AzureDevOps.AutomationTools/Templates/customer-repo/init.ps1
+```
+
+### 3. Declare which engines you use
+
+Create `capabilities.json` — this file is yours and is never overwritten:
+
+```json
+{
+  "capabilities": [
+    {
+      "name": "automation",
+      "module": "NKDAgility.AzureDevOps.AutomationTools",
+      "repo": "https://github.com/nkdAgility/azure-devops-automation-tools.git"
+    },
+    {
+      "name": "governance",
+      "module": "NKDAgility.AzureDevOps.Governance",
+      "repo": "https://github.com/nkdAgility/azure-devops-governance-as-code.git"
+    }
+  ]
+}
+```
+
+### 4. Load the workspace
+
+```bash
+pwsh -NoProfile -Command ". .\init.ps1"
+```
+
+That clones each engine, copies its module into `.system/`, scaffolds the rest of
+the workspace (`.gitignore`, `secrets/`, `governance/`, agent guidance), and
+exports your secrets as environment variables.
+
+### 5. Author your program and run the safety ladder
+
+Create `governance/programs/<name>/` (see [Defining a
+program](#defining-a-program)), then — everything except `apply` is read-only:
+
+```bash
 az login
 ```
 
-Create a program folder at `programs/<name>/` (see [Defining a
-program](#defining-a-program)), then work up the safety ladder — everything
-except `apply` is read-only:
-
 ```bash
-pwsh ./build.ps1 doctor   -Program myprogram   # can my identity do this?
-pwsh ./build.ps1 build    -Program myprogram   # compile YAML -> out/myprogram/resolved.yaml
-pwsh ./build.ps1 plan     -Program myprogram   # what would change?
-pwsh ./build.ps1 apply    -Program myprogram -WhatIf
-pwsh ./build.ps1 apply    -Program myprogram   # reconcile for real
-pwsh ./build.ps1 audit    -Program myprogram   # should now be zero findings
+pwsh -NoProfile -Command ". .\init.ps1; Invoke-Governance build    myprogram"
+pwsh -NoProfile -Command ". .\init.ps1; Invoke-Governance plan     myprogram"
+pwsh -NoProfile -Command ". .\init.ps1; Invoke-Governance apply    myprogram -WhatIf"
+pwsh -NoProfile -Command ". .\init.ps1; Invoke-Governance apply    myprogram"
+pwsh -NoProfile -Command ". .\init.ps1; Invoke-Governance audit    myprogram"
 ```
 
-Program definitions do not have to live in this repo. Point `-ProgramsRoot` at
-any folder — that is how the engine is used against configuration kept in a
-separate, private repository:
+Always run through a **fresh shell** so `init.ps1` executes first. The engine runs
+from `.system/`, which is only refreshed when `init.ps1` runs — a shell that has
+been open all day keeps serving yesterday's engine even after a `git pull`.
+`-NoSync` skips the pull for offline work.
+
+### How your secrets stay yours
+
+`init.ps1` scaffolds `secrets/secrets.example.json` and gitignores everything else
+in `secrets/`. Each entry names the environment variables to export, and your
+`manifest.yaml` references one **by name**, never by value:
+
+```yaml
+auth:        entra                     # default: the signed-in az identity
+accessToken: $Env:AZDEVOPS_MYORG_PAT   # fallback for non-interactive runs
+```
+
+Your workspace `.gitignore` keeps the generated and secret parts out of git:
+
+```gitignore
+/.system/       # materialised engine copies — generated, never committed
+/secrets/*      # PATs
+!/secrets/secrets.example.json
+/output/        # build artefacts and audit reports
+workspace.local.json
+```
+
+### Working on the engine itself
+
+Contributors to *this* repo do clone it, and run the CLI directly against the
+bundled fixture or any program folder:
 
 ```bash
-pwsh ./build.ps1 audit -Program myprogram -ProgramsRoot ../my-config/governance/programs
+pwsh ./build.ps1 audit -Program myprogram -ProgramsRoot ../my-governance/governance/programs
 ```
 
 ---
@@ -116,7 +190,7 @@ A program is a folder of YAML. Only `manifest.yaml` and `hierarchy.yaml` are
 required.
 
 ```text
-programs/<name>/
+governance/programs/<name>/          # in YOUR workspace repo, not this one
   manifest.yaml    # program identity, org, project, auth reference
   hierarchy.yaml   # the authored product / structural / team tree
   access.yaml      # role definitions + group naming conventions
@@ -230,9 +304,9 @@ falls back to an Entra token from your `az login` session for those.
 ## Repository layout
 
 ```text
-build.ps1            # single entry point for every command
-programs/            # empty by default — your program definitions go here,
-                     #   or live elsewhere and are passed via -ProgramsRoot
+build.ps1            # CLI entry point, for working on the engine directly
+programs/            # always empty here — program definitions live in the
+                     #   consuming workspace repo, never in this one
 system/NKDAgility.AzureDevOps.Governance/
   Private/Compile/   # build stage: Import -> Resolve -> Write/Test
   Private/AzureDevOps/   # thin wrappers over the Azure DevOps REST API
