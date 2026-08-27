@@ -1,0 +1,46 @@
+name: Feature request
+description: Suggest a new governed resource type, rule, or capability
+labels: ["enhancement"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        This project is a compliance engine: config is truth, and any difference
+        between config and the live organisation is a violation. Proposals land
+        best when they are framed that way — what should be *asserted*, and what
+        should happen when reality does not match.
+
+  - type: textarea
+    id: problem
+    attributes:
+      label: What governance problem are you trying to solve?
+      description: Describe the situation, not the solution. What goes wrong today?
+    validations:
+      required: true
+
+  - type: textarea
+    id: proposal
+    attributes:
+      label: What would you like the engine to do?
+    validations:
+      required: true
+
+  - type: textarea
+    id: authoring
+    attributes:
+      label: How would it be authored?
+      description: A sketch of the YAML you would write. Guesswork is fine.
+      render: yaml
+
+  - type: textarea
+    id: compliance
+    attributes:
+      label: What does "compliant" mean for it?
+      description: |
+        What should `audit` report when it is missing, when there is an extra one,
+        and when one exists but is misconfigured? What should `apply` do about each?
+
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives you considered

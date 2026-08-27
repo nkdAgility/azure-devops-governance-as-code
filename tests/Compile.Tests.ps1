@@ -4,8 +4,8 @@ BeforeAll {
     $repoRoot = Split-Path -Parent $PSScriptRoot
     Import-Module (Join-Path $repoRoot 'system/NKDAgility.AzureDevOps.Governance/NKDAgility.AzureDevOps.Governance.psd1') -Force
 
-    # Frozen snapshot of a real program, used purely as compile-pipeline test
-    # data. Live client programs no longer live in this repo (they sit in the
+    # Frozen anonymised sample program, used purely as compile-pipeline test
+    # data. Live client programs do not live in this repo (they sit in the
     # client's own repo and are pointed at build.ps1 via -ProgramsRoot).
     $programPath = Join-Path $PSScriptRoot 'fixtures/programs/odyssey'
     $outputPath  = Join-Path $repoRoot 'out/test-fixture-odyssey/resolved.yaml'

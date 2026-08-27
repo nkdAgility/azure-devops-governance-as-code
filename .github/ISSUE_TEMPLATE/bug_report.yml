@@ -1,0 +1,68 @@
+name: Bug report
+description: Something behaves differently from what the documentation says it should
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for the report. Before you post, please **strip organisation names,
+        project names, UPNs, and tokens** from anything you paste. Anonymised YAML
+        that still reproduces the problem is the most useful thing you can give us.
+
+        Found a security issue? Do not file it here — see
+        [SECURITY.md](https://github.com/nkdAgility/azure-devops-governance-as-code/blob/main/SECURITY.md).
+
+  - type: dropdown
+    id: command
+    attributes:
+      label: Which command?
+      options:
+        - build
+        - validate
+        - plan
+        - apply
+        - audit
+        - doctor
+        - other / not command-specific
+    validations:
+      required: true
+
+  - type: textarea
+    id: expected
+    attributes:
+      label: What did you expect to happen?
+    validations:
+      required: true
+
+  - type: textarea
+    id: actual
+    attributes:
+      label: What happened instead?
+      description: Include the command output. Anonymise it first.
+      render: text
+    validations:
+      required: true
+
+  - type: textarea
+    id: repro
+    attributes:
+      label: Minimal configuration that reproduces it
+      description: The smallest anonymised `hierarchy.yaml` / `access.yaml` excerpt that shows the problem.
+      render: yaml
+
+  - type: input
+    id: version
+    attributes:
+      label: Version or commit
+      description: Output of `git rev-parse --short HEAD`, or the module version.
+    validations:
+      required: true
+
+  - type: textarea
+    id: environment
+    attributes:
+      label: Environment
+      description: Output of `$PSVersionTable.PSVersion`, your OS, and your auth mode (entra or pat).
+      render: text
+    validations:
+      required: true

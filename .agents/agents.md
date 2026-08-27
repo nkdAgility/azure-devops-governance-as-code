@@ -5,7 +5,7 @@
 > **After every code change, run the tests. No exceptions.**
 
 ```powershell
-pwsh -NoProfile -Command { Invoke-Pester ./tests/Compile.Tests.ps1 -Output Normal }
+pwsh -NoProfile -Command "Invoke-Pester ./tests -Output Normal"
 ```
 
 If the tests fail, fix the failure before doing anything else. Do not move on, do not explain, do not commit. Fix it.
@@ -13,6 +13,8 @@ If the tests fail, fix the failure before doing anything else. Do not move on, d
 **Silent errors are never acceptable.** If a function cannot complete its work, it must throw. Returning `$null`, an empty set, or `$false` when a call fails is a bug. Every caller depends on the error surfacing immediately.
 
 **Memory scope is this repo only.** Never write to user memory (`/memories/`) or session memory (`/memories/session/`). Do not use the memory tool for persistent notes — write them directly to files under `.agents/` in this repository instead. The `/memories/repo/` tool writes to VS Code workspace storage, not to the repo on disk.
+
+**This repository is public. No customer data, ever.** This repo is the governance *engine*. Program definitions live in their owners' own repositories and reach the engine via `-ProgramsRoot`. The fixture under `tests/fixtures/programs/odyssey/` is anonymised test data and must stay that way. Never commit a real organisation name, project name, product name, UPN, team GUID, engagement detail, or the name of a client individual — in code, in comments, in ADRs, or in plans. Never commit a literal PAT: a manifest `accessToken` must always be an `$Env:` reference. Anything published here is published permanently, including in git history.
 
 ---
 
@@ -222,6 +224,18 @@ guess. The client's own `.agents/` folder is the record; this file is not.
 ## Source layout
 
 ```
+README.md            # public front page — what this is, quick start, concepts
+CONTRIBUTING.md      # how to contribute; links back to this file for the detail
+SECURITY.md          # private vulnerability reporting + the security model
+CODE_OF_CONDUCT.md   # Contributor Covenant 2.1
+LICENSE              # GNU AGPL v3
+CLAUDE.md            # pointer -> AGENTS.md (real files, no longer symlinks)
+AGENTS.md            # pointer -> .agents/agents.md + the non-negotiable rules
+.github/
+  workflows/ci.yml   # Pester on ubuntu + windows, and manifest validation
+  ISSUE_TEMPLATE/    # bug report, feature request, security/discussion links
+  PULL_REQUEST_TEMPLATE.md
+
 programs/            # empty by default — client programs live in client repos
                      # (e.g. NKDAClient-<client>/governance/programs/) and are passed
                      # to build.ps1 via -ProgramsRoot. A program folder holds:
@@ -234,7 +248,7 @@ programs/            # empty by default — client programs live in client repos
     cadence.yaml     # iteration cadence — optional
     members/         # <codeKey>.yaml — desired group membership
 
-tests/fixtures/programs/  # frozen program snapshot — compile-test data only
+tests/fixtures/programs/  # frozen anonymised sample program — compile-test data only
 
 system/NKDAgility.AzureDevOps.Governance/
   Private/
@@ -277,6 +291,7 @@ Key decisions are recorded in `.agents/decisions/`. Read these before making str
 | [ADR-001](decisions/ADR-001-implementation-language.md) | PowerShell over Go — right for internal tooling; Go noted for future wide distribution |
 | [ADR-002](decisions/ADR-002-targeted-rest-checks.md) | Targeted REST checks over bulk fetches — bulk `az boards area project list` causes OOM on large projects |
 | [ADR-003](decisions/ADR-003-apply-is-corrective.md) | Apply is corrective, not just additive — existing but misconfigured resources must be patched |
+| [ADR-004](decisions/ADR-004-scope-future-filtering.md) | `scope: future` nodes are structural placeholders — resolved into the model, filtered out of apply and audit |
 | [ADR-005](decisions/ADR-005-iteration-compliance-rule.md) | Old governance iterations are compliant by definition — only check desired paths exist, never flag old sprints |
 | [ADR-006](decisions/ADR-006-tag-anchor-work-item.md) | Sanctioned tags are made to exist via an anchor work item — ADO has no create-tag API and purges unreferenced tags |
 

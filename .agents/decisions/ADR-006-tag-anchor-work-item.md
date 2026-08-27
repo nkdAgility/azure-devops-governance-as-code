@@ -12,16 +12,16 @@ that did not exist was ignored.
 
 That is a hole in the core ethos. *Config is truth; any difference is a
 violation.* A vocabulary nobody can pick from is not compliant — it is a
-governance document with no effect. On the the client `Odyssey` project the hole was
-total: `GET /Odyssey/_apis/wit/tags` returned `{"count":0}` while ten tags
-were sanctioned in config.
+governance document with no effect. On a live program the hole was total:
+`GET /{project}/_apis/wit/tags` returned `{"count":0}` while ten tags were
+sanctioned in config.
 
 The carve-out existed for a real reason. Azure DevOps gives no way to create a
 bare tag:
 
 - `POST /{project}/_apis/wit/tags` returns **405 Method Not Allowed**. The Tags
   API is Get / List / Update (rename) / Delete only — there is no create verb.
-  Verified against `example-org` with an authorized identity (`GET` on the same
+  Verified against a live organisation with an authorized identity (`GET` on the same
   route returns 200, so the 405 is a genuine method rejection, not auth noise).
 - A tag comes into existence only when it is applied to a work item.
 - Azure DevOps runs a background job that deletes tags no work item references.
@@ -55,7 +55,7 @@ exception, and `-Prune` would delete it out from under the anchor.
 
 **Report missing tags but never create them.** Honest and side-effect free, but
 it breaks the invariant that `audit` returns zero findings after `apply`.
-Odyssey would carry ten permanent, unfixable findings, and a compliance
+A real program would carry ten permanent, unfixable findings, and a compliance
 report that can never reach green trains people to ignore it.
 
 **Report them as a non-blocking class.** Preserves the invariant by redefining
