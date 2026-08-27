@@ -1,6 +1,7 @@
 # Azure DevOps Governance-as-Code
 
-[![CI](https://github.com/nkdAgility/azure-devops-governance-as-code/actions/workflows/ci.yml/badge.svg)](https://github.com/nkdAgility/azure-devops-governance-as-code/actions/workflows/ci.yml)
+[![main](https://github.com/nkdAgility/azure-devops-governance-as-code/actions/workflows/main.yaml/badge.svg)](https://github.com/nkdAgility/azure-devops-governance-as-code/actions/workflows/main.yaml)
+[![PowerShell Gallery](https://img.shields.io/powershellgallery/v/NKDAgility.AzureDevOps.Governance?label=PSGallery)](https://www.powershellgallery.com/packages/NKDAgility.AzureDevOps.Governance)
 [![License: AGPL v3](https://img.shields.io/badge/License-AGPL_v3-blue.svg)](LICENSE)
 [![PowerShell 7.4+](https://img.shields.io/badge/PowerShell-7.4%2B-5391FE.svg)](https://github.com/PowerShell/PowerShell)
 

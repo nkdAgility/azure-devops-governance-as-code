@@ -232,7 +232,8 @@ LICENSE              # GNU AGPL v3
 CLAUDE.md            # symlink -> .agents/agents.md (so agents load this file whole)
 AGENTS.md            # symlink -> .agents/agents.md (same target, both conventions)
 .github/
-  workflows/ci.yml   # Pester on ubuntu + windows, and manifest validation
+  workflows/main.yaml  # the only workflow: Prepare -> Build & Package ->
+                       #   Release -> Finalise, ring-controlled by GitVersion
   ISSUE_TEMPLATE/    # bug report, feature request, security/discussion links
   PULL_REQUEST_TEMPLATE.md
 

@@ -150,33 +150,34 @@ requires user authentication` (HTTP 401). Run `doctor` whenever you see that.
 
 ## Cutting a release
 
-The module is published to the PowerShell Gallery so consumers can pin a version.
-**The manifest is the source of truth for the version, not the tag** — a
-workspace in development mode runs the module straight out of a clone, so the
-committed `.psd1` has to state its own version truthfully. A version injected at
-build time would make every dev-mode copy lie about what it is.
+There is one workflow, [`.github/workflows/main.yaml`](.github/workflows/main.yaml),
+with four stages: **Prepare → Build & Package → Release → Finalise**.
 
-1. Update `ModuleVersion` in
-   `system/NKDAgility.AzureDevOps.Governance/NKDAgility.AzureDevOps.Governance.psd1`.
-   For a prerelease, also set `PrivateData.PSData.Prerelease` (e.g. `'preview1'`).
-2. Move the `Unreleased` entries in [CHANGELOG.md](CHANGELOG.md) under the new
-   version heading.
-3. Merge to `main`.
-4. Tag and push:
+Versions come from **GitVersion** ([`GitVersion.yml`](GitVersion.yml)), not from
+a tag you push by hand, and the branch you land on decides the ring:
 
-```bash
-git tag v1.2.3 && git push origin v1.2.3
-```
+| Branch | Ring | Result |
+| --- | --- | --- |
+| `release/**` | Production | PSGallery **stable**, GitHub release |
+| `main` | Preview | PSGallery **prerelease**, GitHub prerelease |
+| pull request / anything else | Canary | Built and fully tested, **never published** |
 
-The release workflow runs the tests, checks the tag against the manifest, refuses
-to publish if they disagree, publishes to the Gallery, and creates the GitHub
-release. Tags are `v1.2.3` or `v1.2.3-preview1`.
+So a merge to `main` ships a preview automatically, and cutting a stable release
+means branching `release/x.y`. Bump `next-version` in `GitVersion.yml` for a
+major or minor; patches increment on their own.
 
-To rehearse without publishing, run the **Release** workflow manually with
-`dryRun` left ticked — it validates and tests but pushes nothing.
+Release runs only when something under the engine actually changed (`system/`,
+`tests/`, `build.ps1`, the workflow, or `GitVersion.yml`). Run the workflow
+manually with **ForceRelease** to publish anyway.
+
+Move the `Unreleased` entries in [CHANGELOG.md](CHANGELOG.md) under the new
+version heading as part of the change that warrants them, not afterwards.
+
+The committed `ModuleVersion` in the `.psd1` is only a base for development-mode
+consumers — the released version is stamped in at package time from GitVersion.
 
 Bear in mind that a published version can be unlisted but **never deleted**, and
-the package id is reserved permanently. Prefer a prerelease when in doubt.
+the package id is reserved permanently.
 
 ### What counts as breaking
 
