@@ -3,6 +3,6 @@ contact_links:
   - name: Security vulnerability
     url: https://github.com/nkdAgility/azure-devops-governance-as-code/security/advisories/new
     about: Report privately through GitHub security advisories. Never in a public issue.
-  - name: Question or discussion
-    url: https://github.com/nkdAgility/azure-devops-governance-as-code/discussions
-    about: Ask how something works, or discuss an idea before opening a feature request.
+  - name: Code of Conduct
+    url: https://github.com/nkdAgility/azure-devops-governance-as-code/blob/main/CODE_OF_CONDUCT.md
+    about: How we expect people to behave here, and how to report a problem.

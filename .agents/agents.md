@@ -227,7 +227,7 @@ guess. The client's own `.agents/` folder is the record; this file is not.
 README.md            # public front page — what this is, quick start, concepts
 CONTRIBUTING.md      # how to contribute; links back to this file for the detail
 SECURITY.md          # private vulnerability reporting + the security model
-CODE_OF_CONDUCT.md   # Contributor Covenant 2.1
+CODE_OF_CONDUCT.md   # Contributor Covenant 1.4 — matches the other nkdAgility repos
 LICENSE              # GNU AGPL v3
 CLAUDE.md            # pointer -> AGENTS.md (real files, no longer symlinks)
 AGENTS.md            # pointer -> .agents/agents.md + the non-negotiable rules
