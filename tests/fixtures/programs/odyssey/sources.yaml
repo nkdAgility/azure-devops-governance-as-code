@@ -1,0 +1,18 @@
+# programs/odyssey/sources.yaml — pre-migration source locations, per codePath.
+# Consumed only by `preflight`: where each incoming team lives TODAY, so its
+# current state can be evaluated against the governed target before migration.
+# Anonymised fixture data — offline compile/preflight tests only.
+sources:
+  PTL-FND:
+    org:      legacy-org
+    project:  LegacyPortal
+    areaPath: LegacyPortal\Foundation
+    teams:
+      - Foundation Crew
+    repos:
+      include: ['Foundation*', 'fnd-*']
+  PTL-GPI:
+    org:      legacy-org
+    project:  LegacyPortal
+    areaPath: LegacyPortal\Graphics
+    accessToken: $Env:AZDEVOPS_LEGACY_PAT

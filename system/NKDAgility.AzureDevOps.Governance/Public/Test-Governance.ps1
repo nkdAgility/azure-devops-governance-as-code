@@ -15,6 +15,7 @@ function Test-Governance {
     $resolved = Resolve-Governance -Manifest $source.Manifest -Source $source.Hierarchy -Access $source.Access -Members $source.Members -SourceHash $source.Hash -Systems $source.Systems
 
     $issues = Test-ResolvedGovernance -Resolved $resolved
+    $issues += Test-GovernanceSources -Sources $source.Sources -Resolved $resolved
 
     # Owner references must resolve to a real team's product-qualified code (e.g. PTL-FND).
     $teamKeys = @($resolved.teams | Where-Object { $_.codePath } | ForEach-Object { $_.codePath })

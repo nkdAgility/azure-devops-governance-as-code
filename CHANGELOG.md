@@ -17,6 +17,29 @@ previously left alone, without a line of consumer code changing.
 
 ## [Unreleased]
 
+### Added
+
+- `preflight` — per incoming team, a read-only "what would fail if this team
+  moved in today?" report against its pre-migration location, declared in a
+  new authored seed file `programs/<name>/sources.yaml` (source org / project
+  / area path, optional source teams and repo filter, optional PAT env-var
+  reference). Projects the source state into target coordinates and evaluates
+  it with the same rules audit uses: area subtree orphans-to-be, tag usage on
+  the source work items (disallowed + unsanctioned), repo naming, authored
+  UPNs resolvable in the target org, and source-team members not authored in
+  `members/`. Writes `preflight-<code>.txt/.json` beside `resolved.yaml`;
+  non-zero exit on findings. Work item type/state/field compatibility stays
+  with the migration toolchain (ADR-007).
+
+### Changed
+
+- The compliance classification rules (areas, repos, tags, member sets) now
+  live in pure evaluator functions shared by the reconcile and preflight, and
+  the findings summary + text/JSON report writer is shared too. Audit, plan
+  and apply behaviour, finding messages and report formats are unchanged; the
+  only visible difference is console line ordering inside a security-group
+  section (unresolvable entries now print before missing members).
+
 ## [0.1.0] - unreleased
 
 Initial public release.

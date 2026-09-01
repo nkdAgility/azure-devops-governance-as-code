@@ -116,6 +116,7 @@ This is not a provisioning helper that creates missing things and moves on. It i
 | `plan` | Diff resolved desired state vs live ADO. Lists every change that `apply` would make. **Read-only.** |
 | `apply` | Reconcile live ADO to resolved desired state. Creates missing resources **and corrects misconfigured ones**. Supports `-WhatIf`. With `-Prune` (or manifest `settings.prune: true`) also **deletes** orphans — teams, area paths, repos, and extra group members that exist in ADO but not in config. Prune is **never on by default**; `scope: future` placeholders, the project default team/repo, and iteration paths (ADR-005) are never pruned. |
 | `audit` | Read-only compliance report. Reports every resource that deviates from desired state — missing, extra, or wrongly configured. **Exception (by design):** rolling iteration-window maintenance (team sprint/season subscriptions + backlog-iteration root) is time-based upkeep, so audit *performs* it rather than reporting it — it never produces findings and never requires an apply. |
+| `preflight` | Per incoming team: "what would fail if this team moved in today?" Reads the team's PRE-MIGRATION location from `programs/<name>/sources.yaml`, projects it into target coordinates, and runs the SAME evaluators audit uses (area orphans-to-be, tag usage on source work items, repo naming, member resolvability in the target org, unauthored source-team members). **Read-only against both orgs.** Writes `preflight-<code>.txt/.json`; non-zero exit on findings. Process/type/state compatibility is the migration toolchain's job, not preflight's (ADR-007). |
 
 ---
 
@@ -295,6 +296,7 @@ Key decisions are recorded in `.agents/decisions/`. Read these before making str
 | [ADR-004](decisions/ADR-004-scope-future-filtering.md) | `scope: future` nodes are structural placeholders — resolved into the model, filtered out of apply and audit |
 | [ADR-005](decisions/ADR-005-iteration-compliance-rule.md) | Old governance iterations are compliant by definition — only check desired paths exist, never flag old sprints |
 | [ADR-006](decisions/ADR-006-tag-anchor-work-item.md) | Sanctioned tags are made to exist via an anchor work item — ADO has no create-tag API and purges unreferenced tags |
+| [ADR-007](decisions/ADR-007-preflight-shared-evaluators.md) | Preflight evaluates projected pre-migration source state through the audit's own pure evaluators — shared rules, `sources.yaml` seed file, read-only against both orgs |
 
 ---
 

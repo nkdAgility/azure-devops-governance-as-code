@@ -26,10 +26,11 @@
     init.ps1 exports them, and manifest.yaml references one by name as accessToken.
 
 .EXAMPLE
-    Invoke-Governance build    odyssey
-    Invoke-Governance plan     odyssey
-    Invoke-Governance audit    odyssey
-    Invoke-Governance apply    odyssey -WhatIf
+    Invoke-Governance build     odyssey
+    Invoke-Governance plan      odyssey
+    Invoke-Governance audit     odyssey
+    Invoke-Governance preflight odyssey -Code PTL-FND
+    Invoke-Governance apply     odyssey -WhatIf
 
     Invoke-Governance resolves the program and resolved.yaml paths from this folder and
     the workspace output folder. The module's own commands remain available if you want
@@ -72,13 +73,14 @@ function Global:Invoke-Governance {
     [CmdletBinding()]
     param(
         [Parameter(Mandatory, Position = 0)]
-        [ValidateSet('build', 'validate', 'plan', 'apply', 'audit')]
+        [ValidateSet('build', 'validate', 'plan', 'apply', 'audit', 'preflight')]
         [string]$Command,
 
         [Parameter(Mandatory, Position = 1)]
         [string]$Program,
 
         [string]$Org,
+        [string]$Code,
         [switch]$WhatIf,
         [switch]$Prune
     )
@@ -98,6 +100,7 @@ function Global:Invoke-Governance {
         'validate' { Test-Governance -ProgramPath $programPath }
         'plan' { Invoke-GovernancePlan -ProgramPath $programPath -ResolvedPath $resolvedPath -Org $Org }
         'audit' { Invoke-GovernanceAudit -ProgramPath $programPath -ResolvedPath $resolvedPath -Org $Org }
+        'preflight' { Invoke-GovernancePreflight -ProgramPath $programPath -ResolvedPath $resolvedPath -Org $Org -Code $Code }
         'apply' { Invoke-GovernanceApply -ProgramPath $programPath -ResolvedPath $resolvedPath -Org $Org -WhatIf:$WhatIf -Prune:$Prune }
     }
 }

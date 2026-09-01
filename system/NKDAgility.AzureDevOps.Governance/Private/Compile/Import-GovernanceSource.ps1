@@ -59,7 +59,19 @@ function Import-GovernanceSource {
         $systems    = ConvertFrom-Yaml $systemsRaw
     }
 
-    $bytes  = [System.Text.Encoding]::UTF8.GetBytes($manifestRaw + $hierarchyRaw + $accessRaw + $membersRaw + $taxonomyRaw + $systemsRaw)
+    # sources.yaml: optional pre-migration source locations per codePath —
+    # where each incoming team lives TODAY, consumed only by preflight. The
+    # raw text joins the hash last so programs without one keep their hash.
+    $sourcesPath = Join-Path $ProgramPath 'sources.yaml'
+    $sourcesRaw  = ''
+    $sources     = $null
+    if (Test-Path $sourcesPath) {
+        $sourcesRaw = Get-Content -Path $sourcesPath -Raw
+        $parsed     = ConvertFrom-Yaml $sourcesRaw
+        if ($parsed -and $parsed.sources) { $sources = $parsed.sources }
+    }
+
+    $bytes  = [System.Text.Encoding]::UTF8.GetBytes($manifestRaw + $hierarchyRaw + $accessRaw + $membersRaw + $taxonomyRaw + $systemsRaw + $sourcesRaw)
     $stream = [System.IO.MemoryStream]::new($bytes)
     $hash   = (Get-FileHash -InputStream $stream -Algorithm SHA256).Hash.ToLowerInvariant()
 
@@ -90,6 +102,7 @@ function Import-GovernanceSource {
         Cadence      = $cadence
         Taxonomy     = $taxonomy
         Systems      = $systems
+        Sources      = $sources
         TeamIds      = $teamIds
         TeamIdsPath  = $teamIdsPath
     }

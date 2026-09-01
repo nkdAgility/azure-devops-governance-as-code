@@ -13,6 +13,7 @@ organisation, and reconciled.
 | `Invoke-GovernancePlan -ProgramPath <path>` | live organisation | nothing — returns a change set |
 | `Invoke-GovernanceApply -ProgramPath <path>` | live organisation | **the live organisation** |
 | `Invoke-GovernanceAudit -ProgramPath <path>` | live organisation | a compliance report |
+| `Invoke-GovernancePreflight -ProgramPath <path> [-Code <code>]` | the SOURCE org named in `sources.yaml` + the target org | one report pair per node — read-only against both |
 
 ### Rules
 
@@ -21,8 +22,17 @@ organisation, and reconciled.
   before it goes through. `-Prune` removes things that exist live but are not authored —
   treat it as separately destructive.
 - **Programs are seed files.** `hierarchy.yaml`, `access.yaml`, `taxonomy.yaml`,
-  `systems.yaml`, `members/` and `manifest.yaml` are authored by the engagement and never
-  overwritten by tooling.
+  `systems.yaml`, `sources.yaml`, `members/` and `manifest.yaml` are authored by the
+  engagement and never overwritten by tooling.
+- **`preflight` answers "what would fail if this team moved in today?"** — per incoming
+  team, against its CURRENT location declared in `sources.yaml` (source org/project/area
+  path, plus optionally its source teams and a repo filter). It projects the source state
+  into target coordinates and runs the same evaluators audit uses: area subtree orphans,
+  tag usage on the source work items, repo naming, authored UPNs resolvable in the target
+  org, and people in the source team who are not authored. Findings are what the team
+  fixes before migration; work item type/state/field compatibility stays with the
+  migration toolchain. Reports land as `preflight-<code>.txt/.json` beside
+  `resolved.yaml`; non-zero exit on findings, same CI contract as audit.
 - **`apply` writes one work item.** When `taxonomy.yaml` declares a tag vocabulary, apply
   maintains a governance-owned anchor work item holding the sanctioned tags. Azure DevOps
   has no create-tag API and purges tags no work item references, so this is the only way

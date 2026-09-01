@@ -14,6 +14,7 @@
         'Invoke-GovernancePlan',
         'Invoke-GovernanceApply',
         'Invoke-GovernanceAudit',
+        'Invoke-GovernancePreflight',
         'Test-GovernanceAccess'
     )
     CmdletsToExport   = @()

@@ -1634,3 +1634,166 @@ function Set-AdoTeamBacklogVisibilities {
     Invoke-AdoRest -OrgUrl $OrgUrl -Path "$Project/$encoded/_apis/work/teamsettings" `
         -Method 'PATCH' -Body @{ backlogVisibilities = $Visibilities } | Out-Null
 }
+
+# ─── Preflight: source-org reads + two-org auth ──────────────────────────────
+# Preflight audits a team's PRE-MIGRATION location, which usually lives in a
+# DIFFERENT organisation from the governed target. Everything here is
+# read-only; the auth pair swaps the module-wide auth state for the duration
+# of the source-org reads and restores it afterwards.
+
+function Enter-AdoOrgAuth {
+    <#
+        .SYNOPSIS
+        Points the module-wide auth state at another organisation, returning a
+        state token for Exit-AdoOrgAuth to restore. Resolution order:
+
+          1. Entra — the signed-in az session, when the org actually accepts
+             its token (a sister org in the same tenant usually does).
+          2. A per-source PAT reference (sources.yaml accessToken, an $Env:
+             name — resolved here, never logged).
+          3. The already-configured PAT, on the chance it is an all-orgs PAT —
+             kept with a warning so the failure mode is a loud 401, not a
+             silent wrong-org read.
+
+        Throws when no route exists: preflight must fail fast, not report a
+        half-gathered source as compliant.
+    #>
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)][string]$OrgUrl,
+        [string]$AccessTokenRef = ''
+    )
+    $state = @{ PrevPat = $env:AZURE_DEVOPS_EXT_PAT; PrevMode = $script:AdoAuthMode; Changed = $false }
+
+    $entra = Get-AdoEntraToken -Optional
+    if ($entra -and (Test-AdoEntraSession -OrgUrl $OrgUrl -Token $entra)) {
+        if ($script:AdoAuthMode -ne 'entra' -or $env:AZURE_DEVOPS_EXT_PAT) {
+            $script:AdoAuthMode = 'entra'
+            Remove-Item Env:AZURE_DEVOPS_EXT_PAT -ErrorAction SilentlyContinue
+            $state.Changed = $true
+        }
+        return $state
+    }
+
+    $token = Resolve-AccessToken $AccessTokenRef
+    if ($token) {
+        Set-AdoAuth $token
+        $script:AdoAuthMode = 'pat'
+        $state.Changed      = $true
+        return $state
+    }
+
+    if ($script:AdoAuthMode -eq 'pat' -and $env:AZURE_DEVOPS_EXT_PAT) {
+        Write-Host "No Entra session or dedicated token for $OrgUrl — trying the configured PAT (works only if it was created for all accessible organisations)." -ForegroundColor Yellow
+        return $state
+    }
+
+    throw "No credential for '$OrgUrl'. Run 'az login' with an account that has access to it, or set 'accessToken: `$Env:<NAME>' on its sources.yaml entry."
+}
+
+function Exit-AdoOrgAuth {
+    <# Restores the auth state captured by Enter-AdoOrgAuth. Always call from
+       a finally block — leaving source-org auth active would point the next
+       target-org call at the wrong credential. #>
+    [CmdletBinding()]
+    param([Parameter(Mandatory)][hashtable]$State)
+    if (-not $State.Changed) { return }
+    $script:AdoAuthMode = $State.PrevMode
+    if ($null -ne $State.PrevPat) { $env:AZURE_DEVOPS_EXT_PAT = $State.PrevPat }
+    else { Remove-Item Env:AZURE_DEVOPS_EXT_PAT -ErrorAction SilentlyContinue }
+}
+
+function Get-AdoWorkItemUsageUnderArea {
+    <#
+        .SYNOPSIS
+        Tag and iteration-path usage across every work item under an area
+        subtree: WIQL ('UNDER', paged by System.Id so the 20k result cap never
+        truncates a large legacy area) then batched field reads. Returns
+        @{ Tags = name -> count; IterationPaths = path -> count;
+           WorkItemCount = n }. Read-only; failures throw — a half-counted
+        vocabulary must never present as the whole one.
+    #>
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)][string]$OrgUrl,
+        [Parameter(Mandatory)][string]$Project,
+        [Parameter(Mandatory)][string]$AreaPath
+    )
+    $tags       = @{}
+    $iterations = @{}
+    $count      = 0
+
+    $escProject = $Project -replace "'", "''"
+    $escArea    = $AreaPath -replace "'", "''"
+    $pageSize   = 19999   # WIQL flat queries cap at 20000 results
+    $lastId     = 0
+
+    while ($true) {
+        $wiql = "SELECT [System.Id] FROM WorkItems WHERE [System.TeamProject] = '$escProject' AND [System.AreaPath] UNDER '$escArea' AND [System.Id] > $lastId ORDER BY [System.Id] ASC"
+        $page = Invoke-AdoRest -OrgUrl $OrgUrl -Path "$Project/_apis/wit/wiql?`$top=$pageSize" `
+            -Method 'POST' -Body @{ query = $wiql }
+        $ids  = @(@($page.workItems) | ForEach-Object { [int]$_.id })
+        if ($ids.Count -eq 0) { break }
+
+        for ($i = 0; $i -lt $ids.Count; $i += 200) {
+            $batchIds = @($ids[$i..([Math]::Min($i + 199, $ids.Count - 1))])
+            $batch = Invoke-AdoRest -OrgUrl $OrgUrl -Path "$Project/_apis/wit/workitemsbatch" `
+                -Method 'POST' -Body @{ ids = $batchIds; fields = @('System.Tags', 'System.IterationPath') }
+            foreach ($wi in @($batch.value)) {
+                $count++
+                $tagField = [string]$wi.fields.'System.Tags'
+                if (-not [string]::IsNullOrWhiteSpace($tagField)) {
+                    foreach ($t in ($tagField -split ';' | ForEach-Object { $_.Trim() } | Where-Object { $_ })) {
+                        $tags[$t] = 1 + [int]$tags[$t]
+                    }
+                }
+                $iterField = [string]$wi.fields.'System.IterationPath'
+                if ($iterField) { $iterations[$iterField] = 1 + [int]$iterations[$iterField] }
+            }
+        }
+
+        $lastId = $ids[-1]
+        if ($ids.Count -lt $pageSize) { break }
+    }
+
+    return @{ Tags = $tags; IterationPaths = $iterations; WorkItemCount = $count }
+}
+
+function Get-AdoTeamMemberUpnSet {
+    <#
+        .SYNOPSIS
+        The UPNs of a team's direct user members: team -> graph descriptor ->
+        memberships -> principalName per user descriptor (aad./msa. only —
+        nested groups and service identities are not people). A member whose
+        principalName cannot be resolved is skipped with a verbose note:
+        display resolution is best-effort by design (see
+        Resolve-AdoMemberDisplay) and preflight must not report a raw
+        descriptor as an unauthored person. Throws when the team itself
+        cannot be found — a missing source team is a config error, not an
+        empty population.
+    #>
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)][string]$OrgUrl,
+        [Parameter(Mandatory)][string]$Project,
+        [Parameter(Mandatory)][string]$Team
+    )
+    $team = Invoke-AdoRest -OrgUrl $OrgUrl `
+        -Path "_apis/projects/$([Uri]::EscapeDataString($Project))/teams/$([Uri]::EscapeDataString($Team))"
+    if (-not $team.id) { throw "Team '$Team' not found in project '$Project' ($OrgUrl)." }
+
+    $descriptor = (Invoke-AdoRest -OrgUrl $OrgUrl -Path "_apis/graph/descriptors/$($team.id)").value
+    if (-not $descriptor) { throw "Could not resolve a graph descriptor for team '$Team' ($OrgUrl)." }
+
+    $upns = @{}
+    foreach ($mDesc in @((Get-AdoGroupMemberSet -OrgUrl $OrgUrl -Descriptor $descriptor).Keys)) {
+        if ($mDesc -notmatch '^(aad|msa)\.') { continue }
+        $display = Resolve-AdoMemberDisplay -OrgUrl $OrgUrl -Descriptor $mDesc
+        if ($display -eq $mDesc) {
+            Write-Verbose "Get-AdoTeamMemberUpnSet: skipping member '$mDesc' of '$Team' — principalName unresolvable."
+            continue
+        }
+        $upns[$display] = $true
+    }
+    return $upns
+}

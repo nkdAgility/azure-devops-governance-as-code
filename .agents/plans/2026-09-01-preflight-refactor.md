@@ -1,6 +1,11 @@
 # Preflight refactor plan — "what would fail if this team moved in today?"
 
 Date: 2026-09-01
+Status: **implemented** same day — see ADR-007 for the decisions as landed
+(deviations from this plan: no Analytics OData path yet, WIQL-paging only;
+`Use-AdoOrgAuth` became the `Enter-/Exit-AdoOrgAuth` pair; nested-group
+entries are informational-only in preflight). The open Phase-0-style
+decisions at the bottom still stand.
 Origin: SLB/Subsurface engagement. Teams migrating into a governed program
 (e.g. Foundation, living today in `slb1-swt/Petrel` under area path
 `Petrel\Foundation`) need a per-team failure report so they can pre-comply in
