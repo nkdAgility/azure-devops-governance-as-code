@@ -115,6 +115,9 @@ pwsh -NoProfile -Command ". .\init.ps1; Invoke-Governance apply    myprogram"
 pwsh -NoProfile -Command ". .\init.ps1; Invoke-Governance audit    myprogram"
 ```
 
+Migrating teams in from elsewhere? [Preflight](#preflight--compliance-before-the-move)
+gives each one its fix list before it moves.
+
 Always run through a **fresh shell** so `init.ps1` executes first. The engine runs
 from `.system/`, which is only refreshed when `init.ps1` runs — a shell that has
 been open all day keeps serving yesterday's engine even after a `git pull`.
@@ -218,6 +221,8 @@ for.
 | `plan` | Diff the resolved desired state against live Azure DevOps. Lists every change `apply` would make. | No |
 | `apply` | Reconcile live Azure DevOps to the desired state. Creates missing resources **and corrects misconfigured ones**. Supports `-WhatIf` and `-Prune`. | **Yes** |
 | `audit` | Read-only compliance report. Reports every resource that deviates — missing, extra, or wrongly configured. | No |
+| `preflight` | Per incoming team: *if this team moved in today, what would fail?* Reads its pre-migration location from `sources.yaml` and evaluates it with the same rules `audit` uses. | No |
+| `preflight-report` | Render each gathered team's markdown fix report from the files `preflight` wrote. Offline and deterministic — no organisation is contacted. | No |
 | `doctor` | Probe the current identity's permissions against the live org with side-effect-free calls. Exits non-zero listing what is missing. | No |
 
 ### `apply` is corrective, not just additive
@@ -242,6 +247,111 @@ team and repo, and iteration paths are never pruned.
 
 ---
 
+## Preflight — compliance *before* the move
+
+`audit` answers "does this organisation match its config?". **`preflight`
+answers a different question, about a team that has not arrived yet:** *if this
+team's content landed in the governed project today, which checks would fail?*
+
+That is the question that matters when a programme is consolidating. Teams have
+to reshape their area paths, tags and membership **in their current
+organisation, before they migrate** — so each one needs its own concrete list,
+not a general standard to interpret.
+
+Preflight reads a team's pre-migration location, declared per node in
+`sources.yaml`, projects that state into target coordinates, and evaluates it
+with **the same evaluators `audit` uses**. The two can therefore never disagree
+about what compliant means.
+
+```yaml
+# programs/<name>/sources.yaml
+sources:
+  PTL-FND:
+    org:      legacy-org
+    project:  LegacyPortal
+    areaPath: LegacyPortal\Foundation   # project-rooted, no leading backslash
+    teams:    ['Foundation Crew']       # optional: who works there today
+    repos:
+      include: ['Foundation*']          # optional: which repos are theirs
+```
+
+It is **read-only against both organisations**, and exits non-zero on findings,
+the same CI contract as `audit`.
+
+### Gather, then analyse
+
+The run splits in two, and the split is the point:
+
+| Step | Reads | Writes | Network |
+| --- | --- | --- | --- |
+| **Gather** | both organisations | `-data.json` — facts only, no verdicts | Yes |
+| **Analyse** | that data file | `-findings.txt` and `-findings.json` | No |
+| **Render** | data + findings | `-report.md`, the team's fix report | No |
+
+`-Offline` re-analyses the last gathered data, so tightening a rule costs
+nothing and needs no credentials. `-SkipFresh` gathers only the nodes that have
+no data yet — the resume path when a Conditional Access sign-in expires part
+way through a large programme.
+
+Artefacts land one folder per node, named so they still identify themselves
+after being filed somewhere else:
+
+```text
+<output>/preflight/
+  <program>-preflight-summary.md
+  <CODE>/
+    <program>-preflight-<CODE>-data.json
+    <program>-preflight-<CODE>-findings.txt
+    <program>-preflight-<CODE>-findings.json
+    <program>-preflight-<CODE>-observations.md
+    <program>-preflight-<CODE>-report.md
+```
+
+### The report is rendered, never written
+
+`preflight-report` renders the entire markdown document, and **every count and
+every table in it is copied from the two input files**. The only prose anyone
+else contributes is `-observations.md`, spliced into one bounded section. So
+whatever writes the judgement — a person, or a model — cannot reach a table and
+cannot get a number wrong.
+
+Findings are objects rather than strings: `class`, a stable `check` id,
+`subject`, counts, examples, plus whatever your `labels:` map attaches per
+check. That is where your own team-facing standard plugs in — a rule number, an
+owner lane, a task id. The engine knows nothing about your document; your
+program maps the engine's checks onto it.
+
+```yaml
+labels:
+  area.orphan:      { rule: A2, task: 2, lane: PM }
+  tag.unsanctioned: { rule: B4, task: 6, lane: Eng }
+reporting:
+  candidateTagMinUses: 20   # the bar every team is measured against
+```
+
+### Noise is declared, not endured
+
+A legacy area can carry thousands of machine-generated tags — build ids, crash
+session ids. Declare them as `disallowedPatterns` in `taxonomy.yaml` and each
+family collapses to **one finding**, carrying its distinct-tag count, its
+work-item count and examples, instead of one finding per tag. What is left is
+the vocabulary a team actually has to decide about.
+
+### One command for a whole programme
+
+The engine scaffolds an operator workflow into your workspace under `.claude/`,
+all engine-managed: an `/audit-preflight` command, the workflow it runs, two
+subagent definitions, a skill holding the observation rules, and a `PreToolUse`
+hook that refuses any shell command that would run `apply`. Cheap models do the
+gather, render and publish; one capable model per team writes the observations;
+a cheap checker verifies that every number in them exists in the data.
+
+None of that is required. `preflight` and `preflight-report` are plain
+PowerShell, so CI or a bare shell produces the same reports for every team,
+lacking only the observations section.
+
+---
+
 ## Defining a program
 
 A program is a folder of YAML. Only `manifest.yaml` and `hierarchy.yaml` are
@@ -255,6 +365,7 @@ governance/programs/<name>/          # in YOUR workspace repo, not this one
   taxonomy.yaml    # governed vocabularies (work item tags)   — optional
   systems.yaml     # reusable team sub-elements               — optional
   cadence.yaml     # iteration cadence                        — optional
+  sources.yaml     # pre-migration locations, for preflight   — optional
   members/         # <code>.yaml — desired group membership
 ```
 
@@ -393,6 +504,9 @@ The reasoning behind the non-obvious choices is recorded in
 | [ADR-004](.agents/decisions/ADR-004-scope-future-filtering.md) | `scope: future` nodes are structural placeholders, filtered from apply and audit |
 | [ADR-005](.agents/decisions/ADR-005-iteration-compliance-rule.md) | Old governance iterations are compliant by definition |
 | [ADR-006](.agents/decisions/ADR-006-tag-anchor-work-item.md) | Sanctioned tags are made to exist via an anchor work item |
+| [ADR-007](.agents/decisions/ADR-007-preflight-shared-evaluators.md) | Preflight evaluates projected pre-migration state through the audit's own evaluators |
+| [ADR-008](.agents/decisions/ADR-008-preflight-data-then-analysis.md) | Preflight gathers a facts-only data document first, then analyses it offline |
+| [ADR-009](.agents/decisions/ADR-009-preflight-report-orchestration.md) | The renderer owns the fix report; agents write one observations fragment |
 
 ---
 
