@@ -395,12 +395,12 @@ Describe 'ConvertTo-GovernancePreflightReport' {
             $slice.Tags = @{ sanctioned = @('Backlog', 'Triage'); disallowedPatterns = @('^P\d{4}(_\d+)*-I\d+') }
             $labels = @{ 'area.orphan' = @{ rule = 'A2'; task = 2; lane = 'PM' }; 'tag.unsanctioned' = @{ rule = 'B4'; task = 6; lane = 'Eng' } }
             $r = Resolve-GovernancePreflightFindings -Data $data -Slice $slice -Labels $labels
-            $data | ConvertTo-Json -Depth 20 | Set-Content (Join-Path $dir 'preflight-PTL-FND.data.json') -Encoding utf8
+            $data | ConvertTo-Json -Depth 20 | Set-Content (Join-Path $dir 'odyssey-preflight-PTL-FND-data.json') -Encoding utf8
             Write-GovernanceReport -FindingObjects $r.Findings -InfoLines $r.Info -ProgramName 'Odyssey' -Project 'Odyssey' `
-                -OrgUrl 'https://dev.azure.com/x' -Mode 'Preflight' -ReportPath (Join-Path $dir 'preflight-PTL-FND.txt') 6>$null | Out-Null
+                -OrgUrl 'https://dev.azure.com/x' -Mode 'Preflight' -ReportPath (Join-Path $dir 'odyssey-preflight-PTL-FND-findings.txt') 6>$null | Out-Null
         }
-        $script:renderData = Join-Path $script:renderDir 'preflight-PTL-FND.data.json'
-        $script:renderFind = Join-Path $script:renderDir 'preflight-PTL-FND.json'
+        $script:renderData = Join-Path $script:renderDir 'odyssey-preflight-PTL-FND-data.json'
+        $script:renderFind = Join-Path $script:renderDir 'odyssey-preflight-PTL-FND-findings.json'
     }
     AfterAll { Remove-Item $script:renderDir -Recurse -Force -ErrorAction SilentlyContinue }
 
@@ -432,7 +432,7 @@ Describe 'ConvertTo-GovernancePreflightReport' {
 
     It 'splices an observations fragment between the markers and leaves every table byte unchanged' {
         $plain = Get-Content (ConvertTo-GovernancePreflightReport -DataPath $script:renderData -FindingsPath $script:renderFind) -Raw
-        $frag  = Join-Path $script:renderDir 'observations-PTL-FND.md'
+        $frag  = Join-Path $script:renderDir 'odyssey-preflight-PTL-FND-observations.md'
         Set-Content $frag "- **One thing.** It means something.`r`n- **Another.** It means more."
         $with = Get-Content (ConvertTo-GovernancePreflightReport -DataPath $script:renderData -FindingsPath $script:renderFind -ObservationsPath $frag) -Raw
         $with | Should -Match "(?s)<!-- observations:begin -->\n- \*\*One thing\.\*\*.*\n- \*\*Another\.\*\*.*\n<!-- observations:end -->"
@@ -449,13 +449,48 @@ Describe 'ConvertTo-GovernancePreflightReport' {
     }
 }
 
+Describe 'Get-GovernancePreflightPaths' {
+
+    It 'puts every artefact in preflight\<CODE>\ with a self-describing name' {
+        InModuleScope NKDAgility.AzureDevOps.Governance {
+            $p = Get-GovernancePreflightPaths -ResolvedPath 'C:\out\subsurface\resolved.yaml' -Code 'PTL-FND'
+            $p.Root         | Should -Be 'C:\out\subsurface\preflight'
+            $p.Dir          | Should -Be 'C:\out\subsurface\preflight\PTL-FND'
+            $p.Summary      | Should -Be 'C:\out\subsurface\preflight\subsurface-preflight-summary.md'
+            $p.Data         | Should -Be 'C:\out\subsurface\preflight\PTL-FND\subsurface-preflight-PTL-FND-data.json'
+            $p.Findings     | Should -Be 'C:\out\subsurface\preflight\PTL-FND\subsurface-preflight-PTL-FND-findings.txt'
+            $p.FindingsJson | Should -Be 'C:\out\subsurface\preflight\PTL-FND\subsurface-preflight-PTL-FND-findings.json'
+            $p.Observations | Should -Be 'C:\out\subsurface\preflight\PTL-FND\subsurface-preflight-PTL-FND-observations.md'
+            $p.Report       | Should -Be 'C:\out\subsurface\preflight\PTL-FND\subsurface-preflight-PTL-FND-report.md'
+        }
+    }
+
+    It 'takes an explicit program name over the output folder name' {
+        InModuleScope NKDAgility.AzureDevOps.Governance {
+            (Get-GovernancePreflightPaths -ResolvedPath 'C:\out\anything\resolved.yaml' -Code 'X' -Program 'odyssey').Data |
+                Should -Be 'C:\out\anything\preflight\X\odyssey-preflight-X-data.json'
+        }
+    }
+
+    It 'keeps the findings text and JSON twin on the same base name' {
+        InModuleScope NKDAgility.AzureDevOps.Governance {
+            $p = Get-GovernancePreflightPaths -ResolvedPath 'C:\out\p\resolved.yaml' -Code 'C'
+            [System.IO.Path]::ChangeExtension($p.Findings, 'json') | Should -Be $p.FindingsJson
+        }
+    }
+}
+
 Describe 'Invoke-GovernancePreflight -SkipFresh' {
 
     It 'reuses an existing data file and writes the report without contacting any organisation' {
         $dir = Join-Path ([System.IO.Path]::GetTempPath()) "gov-skipfresh-$([guid]::NewGuid())"
         New-Item -ItemType Directory -Path $dir | Out-Null
         try {
-            $dataPath = Join-Path $dir 'preflight-PTL-FND.data.json'
+            # The program folder is named 'odyssey', so the layout is
+            # <dir>\preflight\PTL-FND\odyssey-preflight-PTL-FND-*.
+            $node = Join-Path $dir 'preflight\PTL-FND'
+            New-Item -ItemType Directory -Path $node -Force | Out-Null
+            $dataPath = Join-Path $node 'odyssey-preflight-PTL-FND-data.json'
             $script:fndData | ConvertTo-Json -Depth 20 | Set-Content $dataPath -Encoding utf8
             $stamp = (Get-Item $dataPath).LastWriteTimeUtc
             # No az session or PAT is arranged for this test: if the gather were
@@ -463,10 +498,10 @@ Describe 'Invoke-GovernancePreflight -SkipFresh' {
             Invoke-GovernancePreflight -ProgramPath $script:programPath -ResolvedPath (Join-Path $dir 'resolved.yaml') `
                 -Code PTL-FND -SkipFresh -ErrorAction SilentlyContinue 6>$null 2>$null
             (Get-Item $dataPath).LastWriteTimeUtc | Should -Be $stamp
-            $json = Get-Content (Join-Path $dir 'preflight-PTL-FND.json') -Raw | ConvertFrom-Json
+            $json = Get-Content (Join-Path $node 'odyssey-preflight-PTL-FND-findings.json') -Raw | ConvertFrom-Json
             $json.findingCount | Should -BeGreaterThan 0
             @($json.findings | Where-Object check -eq 'preflight.error').Count | Should -Be 0
-            (Get-Content (Join-Path $dir 'preflight-PTL-FND.txt') -Raw) | Should -Match 'Data     : preflight-PTL-FND.data.json'
+            (Get-Content (Join-Path $node 'odyssey-preflight-PTL-FND-findings.txt') -Raw) | Should -Match 'Data     : odyssey-preflight-PTL-FND-data.json'
         } finally { Remove-Item $dir -Recurse -Force -ErrorAction SilentlyContinue }
     }
 }

@@ -12,25 +12,28 @@ description: >
 
 ## What this is
 
-The preflight pipeline produces, per team, three machine-written files beside
-`resolved.yaml` in the workspace output folder:
+The preflight pipeline produces, per team, three machine-written files in
+`<output>\preflight\<CODE>\`, each named
+`<program>-preflight-<CODE>-<part>`:
 
-| File | Written by | Holds |
+| File part | Written by | Holds |
 | --- | --- | --- |
-| `preflight-<code>.data.json` | the gather | facts: work items per source area path, tag and iteration usage, source-team population, authored-UPN resolution |
-| `preflight-<code>.json` | the analysis | findings as objects: `class`, `check`, `subject`, counts, examples, `message`, plus any rule / task / lane labels the program attached |
-| `preflight-<code>.md` | `ConvertTo-GovernancePreflightReport` | the complete fix report — every table, every count |
+| `-data.json` | the gather | facts: work items per source area path, tag and iteration usage, source-team population, authored-UPN resolution |
+| `-findings.json` | the analysis | findings as objects: `class`, `check`, `subject`, counts, examples, `message`, plus any rule / task / lane labels the program attached |
+| `-report.md` | `ConvertTo-GovernancePreflightReport` | the complete fix report — every table, every count |
 
 The report already says **what** was found. Your job is the one section it
 cannot write: what the shape **means**. You write that to a fourth file,
-`observations-<code>.md`, and the renderer splices it in on its next pass.
+`-observations.md` in the same folder, and the renderer splices it in on its
+next pass.
 
 ## Contract
 
-- **Read:** `preflight-<code>.data.json`, `preflight-<code>.json`, and the
-  rendered `preflight-<code>.md` if it exists (to see what is already said).
-- **Write:** `observations-<code>.md` in the same folder. Nothing else. Not
-  the report, not the program, not `resolved.yaml`, nothing under `.system\`.
+- **Read:** the `-data.json`, the `-findings.json`, and the rendered
+  `-report.md` if it exists (to see what is already said).
+- **Write:** the `-observations.md` in the same folder, at exactly the path
+  you were given. Nothing else. Not the report, not the program, not
+  `resolved.yaml`, nothing under `.system\`.
 - **Shape:** plain markdown bullets. No headings. Four to ten bullets. Bold
   the first few words of each. One or two sentences per bullet.
 - **Return:** the path you wrote, how many bullets, and the list of every

@@ -83,10 +83,11 @@ const gathered = await spawn(
     pwsh -NoProfile -Command ". .\\init.ps1 -NoSync; ${gatherCommand}"
 
 It exits non-zero when it finds anything — that is a result, not an error. Do not retry.
-Then list the files under output\\governance\\${program}\\ (or wherever the console said resolved.yaml lives) and return a manifest:
-- teams: one entry per code that has BOTH preflight-<code>.data.json and preflight-<code>.json, with their absolute paths
-- failed: one entry per code that has no data file, with the one-line reason from the console (quote it; an auth rejection or expired sign-in is a reason, report it exactly)
-- outputDir: the folder those files are in
+Artefacts land under the output folder holding resolved.yaml, in preflight\\<CODE>\\, each file named ${program}-preflight-<CODE>-<part> where part is data.json, findings.txt, findings.json, observations.md or report.md.
+List what is there and return a manifest:
+- teams: one entry per code whose folder has BOTH the -data.json and the -findings.json, with their absolute paths
+- failed: one entry per code with no data file, with the one-line reason from the console (quote it; an auth rejection or expired sign-in is a reason, report it exactly)
+- outputDir: the preflight folder
 Never print or echo any token or PAT value.`,
   { label: 'gather', phase: 'Gather', agentType: 'governance-runner', model: 'haiku', effort: 'low', schema: MANIFEST })
 
@@ -103,8 +104,8 @@ const rendered = await spawn(
 
     pwsh -NoProfile -Command ". .\\init.ps1 -NoSync; Invoke-Governance preflight-report ${program}"
 
-It renders preflight-<code>.md for every team that has data, in ${gathered.outputDir || 'the output folder it names'}.
-Return the manifest again with, per team: code, dataPath, findingsPath, reportPath (the .md it wrote), observationsPath (the same folder, observations-<code>.md — it may not exist yet), and findingCount (read "findingCount" from preflight-<code>.json). Carry the failed list through unchanged: ${JSON.stringify(gathered.failed)}. Teams: ${JSON.stringify(gathered.teams.map(t => t.code))}.`,
+It renders the report for every team that has data, under ${gathered.outputDir || 'the preflight folder it names'}.
+Return the manifest again with, per team: code, dataPath, findingsPath, reportPath (the ${program}-preflight-<CODE>-report.md it wrote), observationsPath (the same folder, ${program}-preflight-<CODE>-observations.md — it may not exist yet), and findingCount (read "findingCount" from that team's -findings.json). Carry the failed list through unchanged: ${JSON.stringify(gathered.failed)}. Teams: ${JSON.stringify(gathered.teams.map(t => t.code))}.`,
   { label: 'render', phase: 'Render', agentType: 'governance-runner', model: 'haiku', effort: 'low', schema: MANIFEST })
 
 if (!rendered) throw new Error('The render agent returned nothing.')
@@ -151,7 +152,7 @@ await spawn(
 
     pwsh -NoProfile -Command ". .\\init.ps1 -NoSync; Invoke-Governance preflight-report ${program}"
 
-This re-renders every team's preflight-<code>.md so the observations-<code>.md fragments written since the last render are spliced in. Return the manifest with reportPath per team.`,
+This re-renders every team's report so the observations fragments written since the last render are spliced in. Return the manifest with reportPath per team.`,
   { label: 'publish', phase: 'Publish', agentType: 'governance-runner', model: 'haiku', effort: 'low', schema: MANIFEST })
 
 // ── Summarise ─────────────────────────────────────────────────────────────────

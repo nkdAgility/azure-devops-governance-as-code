@@ -75,13 +75,11 @@ function Invoke-GovernancePreflight {
     $targetOrg     = if ($Org) { $Org } else { $manifest.org }
     $targetOrgUrl  = ConvertTo-AdoOrgUrl -Org $targetOrg
     $targetProject = if ($resolved.project -and $resolved.project.name) { $resolved.project.name } else { $resolved.program }
-    $reportDir     = Split-Path $ResolvedPath -Parent
-
     # Decide per node whether to gather or reuse, BEFORE authenticating: when
     # every node reuses, no organisation is contacted at all.
     $reuse = @{}
     foreach ($nodeCode in $codes) {
-        $dataPath = Join-Path $reportDir "preflight-$nodeCode.data.json"
+        $dataPath = (Get-GovernancePreflightPaths -ResolvedPath $ResolvedPath -Code $nodeCode -Program (Split-Path -Leaf $ProgramPath)).Data
         $fresh = (Test-Path -LiteralPath $dataPath) -and (
             $MaxAgeHours -le 0 -or ((Get-Date) - (Get-Item -LiteralPath $dataPath).LastWriteTime).TotalHours -lt $MaxAgeHours)
         $reuse[$nodeCode] = $Offline -or ($SkipFresh -and $fresh)
@@ -107,9 +105,11 @@ function Invoke-GovernancePreflight {
 
     foreach ($nodeCode in $codes) {
         $src      = $source.Sources[$nodeCode]
-        $dataPath = Join-Path $reportDir "preflight-$nodeCode.data.json"
+        $paths    = Get-GovernancePreflightPaths -ResolvedPath $ResolvedPath -Code $nodeCode -Program (Split-Path -Leaf $ProgramPath)
+        $dataPath = $paths.Data
         $findings = @()
         $info     = @()
+        New-Item -ItemType Directory -Path $paths.Dir -Force | Out-Null
 
         $reusing  = $reuse[$nodeCode]
         Write-Host "`nPreflighting '$nodeCode': $($src.org)/$($src.project) :: $($src.areaPath)  ->  $targetOrg/$targetProject$(if ($reusing) { '  [' + $(if ($Offline) { 'offline' } else { 'fresh' }) + ': re-analysing ' + (Split-Path $dataPath -Leaf) + ']' })" -ForegroundColor Cyan
@@ -153,9 +153,8 @@ function Invoke-GovernancePreflight {
             & $print @{ level = 'error'; text = "preflight '$nodeCode': $_" }
         }
 
-        $reportPath = Join-Path $reportDir "preflight-$nodeCode.txt"
         Write-GovernanceReport -FindingObjects $findings -ProgramName $resolved.program `
-            -Project $targetProject -OrgUrl $targetOrgUrl -Mode 'Preflight' -ReportPath $reportPath `
+            -Project $targetProject -OrgUrl $targetOrgUrl -Mode 'Preflight' -ReportPath $paths.Findings `
             -Title 'Governance preflight report' -InfoLines $info -ExtraHeader @(
                 "Node     : $nodeCode",
                 "Source   : $($src.org)/$($src.project) :: $($src.areaPath)",

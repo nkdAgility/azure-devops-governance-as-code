@@ -13,8 +13,8 @@ organisation, and reconciled.
 | `Invoke-GovernancePlan -ProgramPath <path>` | live organisation | nothing — returns a change set |
 | `Invoke-GovernanceApply -ProgramPath <path>` | live organisation | **the live organisation** |
 | `Invoke-GovernanceAudit -ProgramPath <path>` | live organisation | a compliance report |
-| `Invoke-GovernancePreflight -ProgramPath <path> [-Code <code>] [-Offline] [-SkipFresh]` | the SOURCE org named in `sources.yaml` + the target org (`-Offline`: only the last `preflight-<code>.data.json`; `-SkipFresh`: only nodes with no data file yet) | `preflight-<code>.data.json` (facts) + `.txt/.json` (findings) per node — read-only against both orgs |
-| `Invoke-GovernancePreflightReport -ProgramPath <path> [-Code <code>]` | the data + findings files already written, plus `observations-<code>.md` if present | `preflight-<code>.md` per node — offline, deterministic, no AI |
+| `Invoke-GovernancePreflight -ProgramPath <path> [-Code <code>] [-Offline] [-SkipFresh]` | the SOURCE org named in `sources.yaml` + the target org (`-Offline`: only the last gathered data; `-SkipFresh`: only nodes with no data file yet) | per node, in `preflight\<CODE>\`: `-data.json` (facts) + `-findings.txt/.json` — read-only against both orgs |
+| `Invoke-GovernancePreflightReport -ProgramPath <path> [-Code <code>]` | the data + findings files already written, plus `-observations.md` if present | `-report.md` per node — offline, deterministic, no AI |
 
 ### Rules
 
@@ -32,10 +32,12 @@ organisation, and reconciled.
   tag usage on the source work items, repo naming, authored UPNs resolvable in the target
   org, and people in the source team who are not authored. Findings are what the team
   fixes before migration; work item type/state/field compatibility stays with the
-  migration toolchain. It runs in two steps: a **gather** writes the facts to
-  `preflight-<code>.data.json` (work items per source area path, tag and iteration
-  usage, population, UPN resolution — it contains UPNs, keep it in the workspace), and a
-  pure **analysis** turns that into `preflight-<code>.txt/.json` beside `resolved.yaml`.
+  migration toolchain. Everything lands in `<output>\preflight\<CODE>\`, named
+  `<program>-preflight-<CODE>-<part>`, with the run summary one level up at
+  `<program>-preflight-summary.md`. It runs in two steps: a **gather** writes the facts
+  to `-data.json` (work items per source area path, tag and iteration usage, population,
+  UPN resolution — it contains UPNs, keep it in the workspace), and a pure **analysis**
+  turns that into `-findings.txt` and `-findings.json`.
   `-Offline` re-runs the analysis on the last data file with no live calls — change a tag
   pattern, re-run, nothing is read from either org. Findings are objects with a stable
   `check` id; `sources.yaml labels:` attaches the engagement's own rule/lane/task fields
@@ -43,11 +45,10 @@ organisation, and reconciled.
   finding per pattern with counts and examples. Non-zero exit on findings, same CI
   contract as audit.
 - **The fix report is rendered, never written.** `preflight-report` turns each team's
-  data + findings files into `preflight-<code>.md` deterministically; every count and
-  table in it is copied from those files. The one section anyone else writes is
-  `observations-<code>.md`, spliced in between markers on the next render. **Never edit
-  `preflight-<code>.md` by hand and never retype a number from it** — change the fragment
-  or the inputs and re-render. The shipped `/audit-preflight` command runs the whole
+  data + findings files into `-report.md` deterministically; every count and table in it
+  is copied from those files. The one section anyone else writes is `-observations.md`,
+  spliced in between markers on the next render. **Never edit the report by hand and
+  never retype a number from it** — change the fragment or the inputs and re-render. The shipped `/audit-preflight` command runs the whole
   pipeline for every team (cheap agents shell out for gather/render/publish; one agent
   per team writes the fragment under `.claude/skills/preflight-report/SKILL.md`; a
   checker verifies its numbers). Subagents spawned by it have a shell for the read-only

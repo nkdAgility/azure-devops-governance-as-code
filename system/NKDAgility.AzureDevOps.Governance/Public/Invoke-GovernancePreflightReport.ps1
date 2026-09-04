@@ -26,27 +26,27 @@ function Invoke-GovernancePreflightReport {
         throw "No sources.yaml in '$ProgramPath' — nothing has been preflighted for this program."
     }
     $codes = if ($Code) { @($Code) } else { @($source.Sources.Keys | Sort-Object) }
-    $dir   = [System.IO.Path]::GetDirectoryName($ResolvedPath)
+    $program = Split-Path -Leaf $ProgramPath
+    $root    = (Get-GovernancePreflightPaths -ResolvedPath $ResolvedPath -Program $program).Root
 
     $rendered = [System.Collections.Generic.List[string]]::new()
     foreach ($c in $codes) {
-        $dataPath = Join-Path $dir "preflight-$c.data.json"
-        $findPath = Join-Path $dir "preflight-$c.json"
-        $obsPath  = Join-Path $dir "observations-$c.md"
-        $missing  = @(foreach ($p in $dataPath, $findPath) { if (-not (Test-Path -LiteralPath $p)) { Split-Path -Leaf $p } })
+        $paths   = Get-GovernancePreflightPaths -ResolvedPath $ResolvedPath -Code $c -Program $program
+        $missing = @(foreach ($p in $paths.Data, $paths.FindingsJson) { if (-not (Test-Path -LiteralPath $p)) { Split-Path -Leaf $p } })
         if ($missing.Count -gt 0) {
-            Write-Host "  [skip]    $c — not gathered yet (missing $($missing -join ', ')); run preflight first" -ForegroundColor DarkYellow
+            Write-Host "  [skip]    $c — not gathered yet (missing $($missing -join ', ') under $($paths.Dir)); run preflight first" -ForegroundColor DarkYellow
             continue
         }
-        $out = ConvertTo-GovernancePreflightReport -DataPath $dataPath -FindingsPath $findPath `
-            -ObservationsPath $obsPath -Labels $source.SourceLabels -Reporting $source.SourceReporting
-        $withObs = Test-Path -LiteralPath $obsPath
+        $out = ConvertTo-GovernancePreflightReport -DataPath $paths.Data -FindingsPath $paths.FindingsJson `
+            -ObservationsPath $paths.Observations -OutputPath $paths.Report `
+            -Labels $source.SourceLabels -Reporting $source.SourceReporting
+        $withObs = Test-Path -LiteralPath $paths.Observations
         Write-Host "  [ok]      $c — $out$(if ($withObs) { ' (with observations)' } else { ' (no observations yet)' })" -ForegroundColor Green
         $rendered.Add($out)
     }
 
     if ($rendered.Count -eq 0) {
-        throw "Nothing rendered: none of $($codes -join ', ') has both a data file and a findings file in '$dir'. Run preflight first."
+        throw "Nothing rendered: none of $($codes -join ', ') has both a data.json and a findings.json under '$root'. Run preflight first."
     }
     return @($rendered)
 }

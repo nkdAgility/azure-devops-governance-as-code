@@ -41,6 +41,14 @@ previously left alone, without a line of consumer code changing.
   report is already the team's fix report. Validated by `validate` and by
   preflight; unknown check ids and attempts to override engine fields fail.
 
+- **Preflight artefacts move into `<output>\preflight\<CODE>\`**, named
+  `<program>-preflight-<CODE>-{data.json,findings.txt,findings.json,observations.md,report.md}`,
+  with the run summary at `<output>\preflight\<program>-preflight-summary.md`.
+  A flat layout scattered five files per team across the output root; the
+  names are self-describing because these files are lifted out and filed
+  elsewhere. `Get-GovernancePreflightPaths` is the single source of the
+  layout. **Breaking for anything that globbed the old flat names**; the
+  output folder is disposable, so re-run `preflight` (or move the files) once.
 - `preflight-report` / `ConvertTo-GovernancePreflightReport` (ADR-009) — the
   per-team markdown fix report, rendered deterministically from the data and
   findings files. Every count, table and label is copied from those files; an

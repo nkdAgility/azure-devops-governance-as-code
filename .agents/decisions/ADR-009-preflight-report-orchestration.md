@@ -31,12 +31,24 @@ managed hook that way), and a workflow script can pick the model per agent.
    section on the renderer's next pass. A person, another assistant, or the
    shipped skill can write it; none of them can reach a table.
 
-3. **`Invoke-GovernancePreflightReport` is the no-AI path.** It renders every
+3. **One folder per node, self-describing names.** Artefacts live under
+   `<output>\preflight\<CODE>\`, each named
+   `<program>-preflight-<CODE>-<part>` (`data.json`, `findings.txt`,
+   `findings.json`, `observations.md`, `report.md`), with the run summary at
+   `<output>\preflight\<program>-preflight-summary.md`. A flat layout put
+   five files per team in the output root, which is ninety for an
+   eighteen-team program. The names repeat what the folder already says
+   because these files get lifted out and filed in engagement systems, where
+   `report.md` identifies nothing. `Get-GovernancePreflightPaths` is the only
+   place that knows the layout, so the gather, the renderer and the shipped
+   workflow cannot disagree.
+
+4. **`Invoke-GovernancePreflightReport` is the no-AI path.** It renders every
    gathered team offline. `Invoke-GovernancePreflight -SkipFresh` reuses
    existing data files and contacts no organisation when nothing is left to
    gather, so an interrupted run resumes with only the missing teams.
 
-4. **The engine ships the orchestration as managed templates:** a slash
+5. **The engine ships the orchestration as managed templates:** a slash
    command (`/audit-preflight`), the workflow it invokes, two subagent
    definitions, the skill that holds the observation rules, and a hook. Model
    tiers are explicit in the workflow: cheap agents shell out for gather,
@@ -44,7 +56,7 @@ managed hook that way), and a workflow script can pick the model per agent.
    cheap checker verifies every number in it exists in the team's data, with
    one retry.
 
-5. **A hook, not a prompt, keeps shell-capable agents away from `apply`.**
+6. **A hook, not a prompt, keeps shell-capable agents away from `apply`.**
    `deny-governance-apply.ps1` refuses any shell command that would run a
    governance apply (except `-WhatIf`). Tool lists are a weak fence around a
    live reconcile; the hook is the fence. Workspaces register it in their own

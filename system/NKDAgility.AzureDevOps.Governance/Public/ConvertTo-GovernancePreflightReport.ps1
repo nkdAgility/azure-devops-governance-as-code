@@ -44,7 +44,14 @@ function ConvertTo-GovernancePreflightReport {
     $threshold = if ($Reporting -and $Reporting.candidateTagMinUses) { [int]$Reporting.candidateTagMinUses } else { 20 }
     $iterTop   = if ($Reporting -and $Reporting.iterationTop)        { [int]$Reporting.iterationTop }        else { 7 }
     $title     = if ($Reporting -and $Reporting.title)               { [string]$Reporting.title }            else { 'Pre-migration readiness check' }
-    if (-not $OutputPath) { $OutputPath = Join-Path ([System.IO.Path]::GetDirectoryName($DataPath)) "preflight-$code.md" }
+    # Default beside the inputs, carrying the same self-describing stem the
+    # data file has ('<program>-preflight-<CODE>-data.json' -> '…-report.md'),
+    # so a report lifted out of the folder still says what it is.
+    if (-not $OutputPath) {
+        $stem = [System.IO.Path]::GetFileName($DataPath) -replace '[-.]?data\.json$', ''
+        $name = if ($stem) { "$stem-report.md" } else { "preflight-$code-report.md" }
+        $OutputPath = Join-Path ([System.IO.Path]::GetDirectoryName($DataPath)) $name
+    }
 
     # ── helpers ────────────────────────────────────────────────────────────
     $inv = [System.Globalization.CultureInfo]::InvariantCulture

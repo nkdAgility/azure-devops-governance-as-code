@@ -29,7 +29,7 @@ One line: the program, the codes (or "every team in sources.yaml"), and that
 the gather reuses any data file that already exists, so a re-run after a
 sign-in expiry fetches only the missing teams. If the operator needs a fresh
 gather for a team that already has data, they delete that team's
-`preflight-<code>.data.json` first; say so only if a code was named.
+`-data.json` first; say so only if a code was named.
 
 ## 3. Run the workflow
 
@@ -45,10 +45,11 @@ again.
 
 When the workflow returns:
 
-- Write its `summary` to `output\governance\<program>\audit-preflight-summary.md`
-  (the output folder is the one `resolved.yaml` is in).
-- List each team's `preflight-<code>.md` with its finding count and whether its
-  observations passed the number check.
+- Write its `summary` to
+  `<output>\preflight\<program>-preflight-summary.md`, where `<output>` is the
+  folder `resolved.yaml` is in.
+- List each team's `<program>-preflight-<CODE>-report.md` with its finding
+  count and whether its observations passed the number check.
 - List every team that failed to gather with the reason the workflow gave. If
   a reason mentions a rejected Entra token or an expired sign-in, tell the
   operator to run `az login --tenant <tenant>` and re-run this command; the
