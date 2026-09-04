@@ -78,6 +78,12 @@ function Test-GovernanceTagCompliance {
         exceptions; sanctioned tags not observed are missing. Disallowed and
         Unsanctioned come back in sorted observed-tag order, Missing unsorted
         (callers sort for display, as the reconcile always has).
+
+        DisallowedByPattern is the same Disallowed set keyed by the pattern
+        that caught each tag (first matching pattern wins, authored order),
+        so a caller can report a machine-generated family — build ids,
+        session ids — as ONE finding instead of one per tag. Patterns that
+        caught nothing are absent.
     #>
     [CmdletBinding()]
     param(
@@ -93,22 +99,31 @@ function Test-GovernanceTagCompliance {
 
     $missing      = @($Sanctioned | Where-Object { -not $liveSet.Contains($_) })
     $disallowed   = [System.Collections.Generic.List[string]]::new()
+    $byPattern    = [ordered]@{}
     $unsanctioned = [System.Collections.Generic.List[string]]::new()
     $okCount      = 0
 
     foreach ($tagName in ($LiveTagNames | Sort-Object)) {
-        $isDisallowed = $false
-        foreach ($p in $DisallowedPatterns) { if ($tagName -match $p) { $isDisallowed = $true; break } }
-        if     ($isDisallowed)                          { $disallowed.Add($tagName) }
+        $caughtBy = $null
+        foreach ($p in $DisallowedPatterns) { if ($tagName -match $p) { $caughtBy = $p; break } }
+        if ($caughtBy) {
+            $disallowed.Add($tagName)
+            if (-not $byPattern.Contains($caughtBy)) { $byPattern[$caughtBy] = [System.Collections.Generic.List[string]]::new() }
+            $byPattern[$caughtBy].Add($tagName)
+        }
         elseif (-not $sanctionedSet.Contains($tagName)) { $unsanctioned.Add($tagName) }
         else                                            { $okCount++ }
     }
 
+    $grouped = [ordered]@{}
+    foreach ($p in $byPattern.Keys) { $grouped[$p] = @($byPattern[$p]) }
+
     return @{
-        Missing      = $missing
-        Disallowed   = @($disallowed)
-        Unsanctioned = @($unsanctioned)
-        OkCount      = $okCount
+        Missing             = $missing
+        Disallowed          = @($disallowed)
+        DisallowedByPattern = $grouped
+        Unsanctioned        = @($unsanctioned)
+        OkCount             = $okCount
     }
 }
 

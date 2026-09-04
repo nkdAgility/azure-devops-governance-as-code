@@ -62,13 +62,17 @@ function Import-GovernanceSource {
     # sources.yaml: optional pre-migration source locations per codePath —
     # where each incoming team lives TODAY, consumed only by preflight. The
     # raw text joins the hash last so programs without one keep their hash.
-    $sourcesPath = Join-Path $ProgramPath 'sources.yaml'
-    $sourcesRaw  = ''
-    $sources     = $null
+    $sourcesPath  = Join-Path $ProgramPath 'sources.yaml'
+    $sourcesRaw   = ''
+    $sources      = $null
+    $sourceLabels    = $null   # optional `labels:` — engagement fields attached per preflight check id (ADR-008)
+    $sourceReporting = $null   # optional `reporting:` — how the rendered fix report is framed (ADR-009)
     if (Test-Path $sourcesPath) {
         $sourcesRaw = Get-Content -Path $sourcesPath -Raw
         $parsed     = ConvertFrom-Yaml $sourcesRaw
-        if ($parsed -and $parsed.sources) { $sources = $parsed.sources }
+        if ($parsed -and $parsed.sources)   { $sources         = $parsed.sources }
+        if ($parsed -and $parsed.labels)    { $sourceLabels    = $parsed.labels }
+        if ($parsed -and $parsed.reporting) { $sourceReporting = $parsed.reporting }
     }
 
     $bytes  = [System.Text.Encoding]::UTF8.GetBytes($manifestRaw + $hierarchyRaw + $accessRaw + $membersRaw + $taxonomyRaw + $systemsRaw + $sourcesRaw)
@@ -103,6 +107,8 @@ function Import-GovernanceSource {
         Taxonomy     = $taxonomy
         Systems      = $systems
         Sources      = $sources
+        SourceLabels    = $sourceLabels
+        SourceReporting = $sourceReporting
         TeamIds      = $teamIds
         TeamIdsPath  = $teamIdsPath
     }

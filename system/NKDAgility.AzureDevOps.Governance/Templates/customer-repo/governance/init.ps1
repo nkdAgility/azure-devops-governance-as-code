@@ -30,6 +30,9 @@
     Invoke-Governance plan      odyssey
     Invoke-Governance audit     odyssey
     Invoke-Governance preflight odyssey -Code PTL-FND
+    Invoke-Governance preflight odyssey -Code PTL-FND -Offline   # re-analyse, no live calls
+    Invoke-Governance preflight odyssey -SkipFresh               # only teams with no data file yet
+    Invoke-Governance preflight-report odyssey                   # render every team's fix report (offline)
     Invoke-Governance apply     odyssey -WhatIf
 
     Invoke-Governance resolves the program and resolved.yaml paths from this folder and
@@ -59,6 +62,53 @@ if (-not (Get-Module -ListAvailable -Name 'powershell-yaml')) {
 
 Import-Module $modulePath -Force
 
+# --- Register this capability's safety hook --------------------------------
+# .claude\hooks\deny-governance-apply.ps1 is shipped and refreshed by this
+# engine, but the file that ACTIVATES it - .claude\settings.json - is a seed
+# owned by the workspace (scaffolded by the automation tools). A hook that
+# ships and is never wired up is not a control, so register it here, on every
+# session, idempotently: add exactly one PreToolUse entry, never remove or
+# reorder anything else, and warn rather than throw if the file cannot be read.
+$hookRelative = '.claude/hooks/deny-governance-apply.ps1'
+$hookFile = Join-Path $WorkspaceRoot ($hookRelative -replace '/', '\')
+if (Test-Path -LiteralPath $hookFile) {
+    $settingsPath = Join-Path $WorkspaceRoot '.claude\settings.json'
+    $hookCommand = 'pwsh -NoProfile -File "$CLAUDE_PROJECT_DIR/' + $hookRelative + '"'
+    try {
+        $settings = if (Test-Path -LiteralPath $settingsPath) {
+            Get-Content -LiteralPath $settingsPath -Raw | ConvertFrom-Json
+        }
+        else { [pscustomobject]@{} }
+
+        if (-not $settings.PSObject.Properties['hooks']) {
+            $settings | Add-Member -NotePropertyName 'hooks' -NotePropertyValue ([pscustomobject]@{})
+        }
+        if (-not $settings.hooks.PSObject.Properties['PreToolUse']) {
+            $settings.hooks | Add-Member -NotePropertyName 'PreToolUse' -NotePropertyValue @()
+        }
+
+        $already = @($settings.hooks.PreToolUse | Where-Object {
+                @($_.hooks | Where-Object { [string]$_.command -like "*deny-governance-apply.ps1*" }).Count -gt 0
+            }).Count -gt 0
+
+        if (-not $already) {
+            $entry = [pscustomobject]@{
+                matcher = 'PowerShell|Bash'
+                hooks   = @([pscustomobject]@{ type = 'command'; command = $hookCommand })
+            }
+            $settings.hooks.PreToolUse = @($settings.hooks.PreToolUse) + $entry
+            New-Item -Path (Split-Path -Parent $settingsPath) -ItemType Directory -Force | Out-Null
+            $settings | ConvertTo-Json -Depth 12 | Set-Content -LiteralPath $settingsPath
+            Write-Host "==> Governance: registered the deny-apply hook in .claude\settings.json" -ForegroundColor Cyan
+        }
+    }
+    catch {
+        Write-Warning ("Could not register the governance deny-apply hook in '$settingsPath': $_. " +
+            "Add a PreToolUse entry with matcher 'PowerShell|Bash' running '$hookRelative' by hand, " +
+            'or agents in this workspace will not be blocked from running a governance apply.')
+    }
+}
+
 $programsRoot = Join-Path $PSScriptRoot 'programs'
 # Invoke-Governance is global so it outlives this script, so it cannot close over a
 # script-scoped variable - by the time anyone calls it, this scope is gone. The roots go
@@ -73,7 +123,7 @@ function Global:Invoke-Governance {
     [CmdletBinding()]
     param(
         [Parameter(Mandatory, Position = 0)]
-        [ValidateSet('build', 'validate', 'plan', 'apply', 'audit', 'preflight')]
+        [ValidateSet('build', 'validate', 'plan', 'apply', 'audit', 'preflight', 'preflight-report')]
         [string]$Command,
 
         [Parameter(Mandatory, Position = 1)]
@@ -82,7 +132,9 @@ function Global:Invoke-Governance {
         [string]$Org,
         [string]$Code,
         [switch]$WhatIf,
-        [switch]$Prune
+        [switch]$Prune,
+        [switch]$Offline,    # preflight: re-analyse the last gathered data file, touch no org
+        [switch]$SkipFresh   # preflight: gather only nodes with no data file yet; reuse the rest
     )
 
     $programPath = Join-Path $Global:NkdaGovernanceProgramsRoot $Program
@@ -100,7 +152,8 @@ function Global:Invoke-Governance {
         'validate' { Test-Governance -ProgramPath $programPath }
         'plan' { Invoke-GovernancePlan -ProgramPath $programPath -ResolvedPath $resolvedPath -Org $Org }
         'audit' { Invoke-GovernanceAudit -ProgramPath $programPath -ResolvedPath $resolvedPath -Org $Org }
-        'preflight' { Invoke-GovernancePreflight -ProgramPath $programPath -ResolvedPath $resolvedPath -Org $Org -Code $Code }
+        'preflight' { Invoke-GovernancePreflight -ProgramPath $programPath -ResolvedPath $resolvedPath -Org $Org -Code $Code -Offline:$Offline -SkipFresh:$SkipFresh }
+        'preflight-report' { Invoke-GovernancePreflightReport -ProgramPath $programPath -ResolvedPath $resolvedPath -Code $Code }
         'apply' { Invoke-GovernanceApply -ProgramPath $programPath -ResolvedPath $resolvedPath -Org $Org -WhatIf:$WhatIf -Prune:$Prune }
     }
 }

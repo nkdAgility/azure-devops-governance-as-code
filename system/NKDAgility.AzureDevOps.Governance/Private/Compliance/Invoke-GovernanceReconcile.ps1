@@ -1169,6 +1169,20 @@ function Resolve-GovernanceErrorReason {
     [CmdletBinding()]
     param([Parameter(Mandatory)][string]$Finding)
 
+    # Preflight signatures first — they carry their own diagnosis.
+    if ($Finding -match 'no data file at') {
+        return "preflight -Offline re-analyses a previous gather, and none exists yet for this node - run preflight without -Offline once to gather it."
+    }
+    if ($Finding -match 'source organisation .* refused the read') {
+        if ($Finding -match 'rejected the signed-in Entra token') {
+            return "the source org rejected the Entra token (Conditional Access forced sign-out) and the fallback PAT is not valid there. Run 'az login --tenant <org tenant>' and start preflight in the same minute - a sign-in frequency policy invalidates the session soon after - or set a source-org PAT as 'accessToken: `$Env:<NAME>' on the sources.yaml entry."
+        }
+        if ($Finding -match 'no Entra token could be acquired') {
+            return "the az session cannot mint a token (expired or missing sign-in) and the fallback PAT is not valid for the source org. Run 'az login --tenant <org tenant>' and retry, or set a source-org PAT on the sources.yaml entry."
+        }
+        return "the credential used for the source org was refused - check the route named in the finding; a source-org PAT ('accessToken' on the sources.yaml entry) is the unattended fallback."
+    }
+
     if ($Finding -match '401|Unauthorized|requires user authentication') {
         if ($Finding -match 'ACL|structural authority') {
             return "no usable credential can WRITE security ACLs. vso.security_manage is not selectable in the PAT UI; 'az login' enables the Entra route - but if the org rejects Entra tokens (forced sign-out), Conditional Access is blocking this device: use an org-managed device or VPN. Verify with 'doctor'."

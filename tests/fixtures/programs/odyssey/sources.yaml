@@ -16,3 +16,17 @@ sources:
     project:  LegacyPortal
     areaPath: LegacyPortal\Graphics
     accessToken: $Env:AZDEVOPS_LEGACY_PAT
+
+# Engagement vocabulary attached to findings per check id (ADR-008): here a
+# made-up team-facing standard with lettered rules and owner lanes.
+labels:
+  area.orphan:       { rule: A2, lane: PM, task: 2 }
+  tag.disallowed:    { rule: B5, lane: Prog }
+  tag.unsanctioned:  { rule: B4, lane: Eng, task: 6 }
+  member.unauthored: { rule: H1, lane: PM, task: 3 }
+
+# How the rendered fix report is framed (ADR-009). Fixture values only.
+reporting:
+  standard: "Team Target Format (fixture standard)"
+  audience: "Domain teams migrating into the Odyssey project"
+  candidateTagMinUses: 5

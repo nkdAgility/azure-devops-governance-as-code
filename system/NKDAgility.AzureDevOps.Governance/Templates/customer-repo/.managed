@@ -6,3 +6,14 @@
 # One relative path per line. Blank lines and # comments ignored.
 
 governance/init.ps1
+
+# The operator's preflight orchestration (ADR-009): a slash command, the
+# workflow it invokes, the two subagent definitions it spawns, the skill that
+# holds the observation rules, and the hook that keeps a shell-capable agent
+# away from apply. Engine-owned so every workspace runs the same version.
+.claude/commands/audit-preflight.md
+.claude/workflows/audit-preflight.js
+.claude/agents/governance-runner.md
+.claude/agents/preflight-reporter.md
+.claude/skills/preflight-report/SKILL.md
+.claude/hooks/deny-governance-apply.ps1

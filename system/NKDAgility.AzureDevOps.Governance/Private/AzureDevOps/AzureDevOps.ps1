@@ -247,11 +247,20 @@ function Get-AdoEntraToken {
         return $script:AdoEntraToken
     }
     # 499b84ac-1321-427f-aa17-267ca6975798 is the Azure DevOps resource id.
-    $json = az account get-access-token --resource '499b84ac-1321-427f-aa17-267ca6975798' --output json 2>$null
+    # az's stderr is the only place the REASON lives (expired refresh token,
+    # Conditional Access sign-in frequency, no login) — keep its first line,
+    # with any token-shaped text redacted, so the fallback can say why.
+    $output = az account get-access-token --resource '499b84ac-1321-427f-aa17-267ca6975798' --output json 2>&1
+    $json   = @($output | Where-Object { $_ -isnot [System.Management.Automation.ErrorRecord] }) -join "`n"
     if ($LASTEXITCODE -ne 0 -or [string]::IsNullOrWhiteSpace($json)) {
+        $reason = @($output | Where-Object { $_ -is [System.Management.Automation.ErrorRecord] } | ForEach-Object { [string]$_ }) -join ' '
+        $reason = ($reason -replace 'eyJ[A-Za-z0-9._-]{20,}', '<redacted>') -replace '\s+', ' '
+        if ($reason -match '(AADSTS\d+[^.]*\.)') { $reason = $Matches[1] }
+        $script:AdoEntraLastError = if ($reason) { $reason.Trim() } else { 'az account get-access-token returned nothing — no az login session' }
         if ($Optional) { return $null }
-        throw "Cannot acquire an Entra token for Azure DevOps. Security ACL writes need it when the PAT lacks vso.security_manage (not selectable in the PAT UI) and org policy forbids full-access PATs. Run 'az login' with the account that has access to the target org, then retry."
+        throw "Cannot acquire an Entra token for Azure DevOps ($($script:AdoEntraLastError)). Security ACL writes need it when the PAT lacks vso.security_manage (not selectable in the PAT UI) and org policy forbids full-access PATs. Run 'az login' with the account that has access to the target org, then retry."
     }
+    $script:AdoEntraLastError = $null
     $tok = $json | ConvertFrom-Json
     $script:AdoEntraToken        = $tok.accessToken
     $script:AdoEntraTokenExpires = [datetime]$tok.expiresOn
@@ -1663,16 +1672,26 @@ function Enter-AdoOrgAuth {
         [Parameter(Mandatory)][string]$OrgUrl,
         [string]$AccessTokenRef = ''
     )
-    $state = @{ PrevPat = $env:AZURE_DEVOPS_EXT_PAT; PrevMode = $script:AdoAuthMode; Changed = $false }
+    $state = @{ PrevPat = $env:AZURE_DEVOPS_EXT_PAT; PrevMode = $script:AdoAuthMode; Changed = $false; Route = ''; Why = '' }
 
+    # Say exactly which route was taken and why the better ones were not: the
+    # 401 that follows a wrong-org PAT is otherwise diagnosed as a scope problem.
     $entra = Get-AdoEntraToken -Optional
-    if ($entra -and (Test-AdoEntraSession -OrgUrl $OrgUrl -Token $entra)) {
-        if ($script:AdoAuthMode -ne 'entra' -or $env:AZURE_DEVOPS_EXT_PAT) {
-            $script:AdoAuthMode = 'entra'
-            Remove-Item Env:AZURE_DEVOPS_EXT_PAT -ErrorAction SilentlyContinue
-            $state.Changed = $true
+    if ($entra) {
+        if (Test-AdoEntraSession -OrgUrl $OrgUrl -Token $entra) {
+            if ($script:AdoAuthMode -ne 'entra' -or $env:AZURE_DEVOPS_EXT_PAT) {
+                $script:AdoAuthMode = 'entra'
+                Remove-Item Env:AZURE_DEVOPS_EXT_PAT -ErrorAction SilentlyContinue
+                $state.Changed = $true
+            }
+            $state.Route = 'entra'
+            return $state
         }
-        return $state
+        $state.Why = "$OrgUrl rejected the signed-in Entra token (forced sign-out)"
+        Write-Host "  $($state.Why). This is Conditional Access — a sign-in frequency, managed-device or IP policy the org enforces on Entra sign-ins but not on PATs. A token that worked minutes after 'az login' and fails later is a sign-in frequency policy: sign in again immediately before running." -ForegroundColor Yellow
+    } else {
+        $state.Why = "no Entra token could be acquired from the az session$(if ($script:AdoEntraLastError) { " ($($script:AdoEntraLastError))" })"
+        Write-Host "  $($state.Why)" -ForegroundColor Yellow
     }
 
     $token = Resolve-AccessToken $AccessTokenRef
@@ -1680,15 +1699,17 @@ function Enter-AdoOrgAuth {
         Set-AdoAuth $token
         $script:AdoAuthMode = 'pat'
         $state.Changed      = $true
+        $state.Route        = 'source-pat'
         return $state
     }
 
     if ($script:AdoAuthMode -eq 'pat' -and $env:AZURE_DEVOPS_EXT_PAT) {
-        Write-Host "No Entra session or dedicated token for $OrgUrl — trying the configured PAT (works only if it was created for all accessible organisations)." -ForegroundColor Yellow
+        Write-Host "  No dedicated token for $OrgUrl — trying the configured target-org PAT (works only if it was created for all accessible organisations)." -ForegroundColor Yellow
+        $state.Route = 'target-pat'
         return $state
     }
 
-    throw "No credential for '$OrgUrl'. Run 'az login' with an account that has access to it, or set 'accessToken: `$Env:<NAME>' on its sources.yaml entry."
+    throw "No credential for '$OrgUrl': $($state.Why). Run 'az login' with an account that has access to it, or set 'accessToken: `$Env:<NAME>' on its sources.yaml entry."
 }
 
 function Exit-AdoOrgAuth {
@@ -1706,10 +1727,11 @@ function Exit-AdoOrgAuth {
 function Get-AdoWorkItemUsageUnderArea {
     <#
         .SYNOPSIS
-        Tag and iteration-path usage across every work item under an area
-        subtree: WIQL ('UNDER', paged by System.Id so the 20k result cap never
-        truncates a large legacy area) then batched field reads. Returns
-        @{ Tags = name -> count; IterationPaths = path -> count;
+        Tag, iteration-path and area-path usage across every work item under
+        an area subtree: WIQL ('UNDER', paged by System.Id so the 20k result
+        cap never truncates a large legacy area) then batched field reads.
+        Returns @{ Tags = name -> count; IterationPaths = path -> count;
+           AreaPaths = path -> count (as WIQL reports it, no leading '\');
            WorkItemCount = n }. Read-only; failures throw — a half-counted
         vocabulary must never present as the whole one.
     #>
@@ -1721,6 +1743,7 @@ function Get-AdoWorkItemUsageUnderArea {
     )
     $tags       = @{}
     $iterations = @{}
+    $areas      = @{}
     $count      = 0
 
     $escProject = $Project -replace "'", "''"
@@ -1738,9 +1761,11 @@ function Get-AdoWorkItemUsageUnderArea {
         for ($i = 0; $i -lt $ids.Count; $i += 200) {
             $batchIds = @($ids[$i..([Math]::Min($i + 199, $ids.Count - 1))])
             $batch = Invoke-AdoRest -OrgUrl $OrgUrl -Path "$Project/_apis/wit/workitemsbatch" `
-                -Method 'POST' -Body @{ ids = $batchIds; fields = @('System.Tags', 'System.IterationPath') }
+                -Method 'POST' -Body @{ ids = $batchIds; fields = @('System.Tags', 'System.IterationPath', 'System.AreaPath') }
             foreach ($wi in @($batch.value)) {
                 $count++
+                $areaField = [string]$wi.fields.'System.AreaPath'
+                if ($areaField) { $areas[$areaField] = 1 + [int]$areas[$areaField] }
                 $tagField = [string]$wi.fields.'System.Tags'
                 if (-not [string]::IsNullOrWhiteSpace($tagField)) {
                     foreach ($t in ($tagField -split ';' | ForEach-Object { $_.Trim() } | Where-Object { $_ })) {
@@ -1756,7 +1781,7 @@ function Get-AdoWorkItemUsageUnderArea {
         if ($ids.Count -lt $pageSize) { break }
     }
 
-    return @{ Tags = $tags; IterationPaths = $iterations; WorkItemCount = $count }
+    return @{ Tags = $tags; IterationPaths = $iterations; AreaPaths = $areas; WorkItemCount = $count }
 }
 
 function Get-AdoTeamMemberUpnSet {

@@ -12,12 +12,21 @@ function Write-GovernanceReport {
         InfoLines are context that is NOT a finding (preflight uses them for
         mapping guidance); they never affect the finding count or CI exit.
 
+        FindingObjects is the structured alternative (ADR-008): each entry is
+        a dictionary with at least `class` (missing | drift | error |
+        unresolvable | exception) and `message` (the prefixed human line).
+        The text report renders the messages exactly as it renders strings;
+        the JSON twin writes the objects whole, so check ids, subjects,
+        counts and engagement labels survive into machine-readable output.
+        Pass one or the other, not both.
+
         Returns the mode's finding-count suffix ('found', 'remaining after
         apply', …) so the caller can word its terminating error identically.
     #>
     [CmdletBinding()]
     param(
         [AllowEmptyCollection()][string[]]$Findings = @(),
+        [AllowEmptyCollection()][object[]]$FindingObjects = $null,
         [Parameter(Mandatory)][string]$ProgramName,
         [Parameter(Mandatory)][string]$Project,
         [Parameter(Mandatory)][string]$OrgUrl,
@@ -27,6 +36,17 @@ function Write-GovernanceReport {
         [AllowEmptyCollection()][string[]]$ExtraHeader = @(),
         [AllowEmptyCollection()][string[]]$InfoLines = @()
     )
+
+    $structured = $PSBoundParameters.ContainsKey('FindingObjects')
+    if ($structured) {
+        if ($PSBoundParameters.ContainsKey('Findings') -and $Findings.Count -gt 0) {
+            throw 'Write-GovernanceReport: pass either -Findings (strings) or -FindingObjects, not both.'
+        }
+        foreach ($f in @($FindingObjects)) {
+            if (-not $f.class -or -not $f.message) { throw "Write-GovernanceReport: every finding object needs 'class' and 'message' (got: $($f | ConvertTo-Json -Compress -Depth 3))." }
+        }
+        $Findings = @(@($FindingObjects) | ForEach-Object { [string]$_.message })
+    }
 
     $exceptions = @($Findings | Where-Object { $_ -like 'AUDIT EXCEPTION*' })
     $missing    = @($Findings | Where-Object { $_ -like 'MISSING*' })
@@ -116,18 +136,30 @@ function Write-GovernanceReport {
         Write-Host "`nReport written to: $ReportPath" -ForegroundColor Cyan
 
         $jsonPath   = [System.IO.Path]::ChangeExtension($ReportPath, 'json')
-        $classified = @($Findings | ForEach-Object {
-            $class = if ($_ -like 'MISSING*')              { 'missing' }
-                     elseif ($_ -like 'AUDIT EXCEPTION*')  { 'exception' }
-                     elseif ($_ -like 'UNRESOLVABLE*')     { 'unresolvable' }
-                     elseif ($_ -like 'ERROR*')            { 'error' }
-                     else                                  { 'drift' }
-            $entry = [ordered]@{ class = $class; message = $_ }
-            if ($class -in 'error', 'unresolvable') {
-                $entry['why'] = Resolve-GovernanceErrorReason -Finding $_
-            }
-            $entry
-        })
+        $classified = if ($structured) {
+            @(@($FindingObjects) | ForEach-Object {
+                # class first, then everything the analysis attached, then why.
+                $entry = [ordered]@{ class = [string]$_.class }
+                foreach ($k in @($_.Keys)) { if ($k -ne 'class') { $entry[$k] = $_[$k] } }
+                if ($entry.class -in 'error', 'unresolvable' -and -not $entry.Contains('why')) {
+                    $entry['why'] = Resolve-GovernanceErrorReason -Finding ([string]$_.message)
+                }
+                $entry
+            })
+        } else {
+            @($Findings | ForEach-Object {
+                $class = if ($_ -like 'MISSING*')              { 'missing' }
+                         elseif ($_ -like 'AUDIT EXCEPTION*')  { 'exception' }
+                         elseif ($_ -like 'UNRESOLVABLE*')     { 'unresolvable' }
+                         elseif ($_ -like 'ERROR*')            { 'error' }
+                         else                                  { 'drift' }
+                $entry = [ordered]@{ class = $class; message = $_ }
+                if ($class -in 'error', 'unresolvable') {
+                    $entry['why'] = Resolve-GovernanceErrorReason -Finding $_
+                }
+                $entry
+            })
+        }
         $doc = [ordered]@{
             program      = $ProgramName
             project      = $Project
