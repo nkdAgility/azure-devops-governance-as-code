@@ -54,12 +54,22 @@ next pass.
    dump paths that are one triage board), overlaps with the sanctioned
    vocabulary, things the counts imply but do not state (empty paths, a
    BACKLOG path that a rule says folds away). That is the whole job.
+4. **Propose destinations for the undecided tags, in the report's own three
+   buckets.** Every tag with no destination decided has to become one of:
+   **sanctioned** (it names what the work *is*, and it stays), a **board
+   column** (it names where the work has *got to* — "test passed", "kicked
+   off", "triaged" — so a column carries it and the tag stops being applied),
+   or **retired** (nothing depends on it). Group your suggestions that way and
+   say which bucket and why. Two cautions: a tag applied by tooling the team
+   does not control cannot be retired by the team, so it has to be sanctioned
+   or it becomes a permanent exception; and never propose a destination for a
+   tag the report already shows as decided.
 4. **Use the labels, not your own scheme.** If findings carry `rule`, `task`
    or `lane`, refer to those exactly. If they carry none, name the check id.
    Never invent a rule number or a document name.
-5. **No recommendations the program has not made.** You may say "this looks
-   like a capability tag in the labelled sense"; you may not decide the tag
-   name, the fold, or who does the work. Those are the team's returns.
+5. **Propose, never decide.** A destination you suggest is a proposal for the
+   team to accept or reject; it is not settled until it is in the program
+   config. Do not invent tag names, decide a fold, or assign who does the work.
 6. **No people by name.** UPNs appear in the findings for a reason; they do
    not appear in a document that gets forwarded.
 7. **If the findings contain a `preflight.error`, write one bullet saying the

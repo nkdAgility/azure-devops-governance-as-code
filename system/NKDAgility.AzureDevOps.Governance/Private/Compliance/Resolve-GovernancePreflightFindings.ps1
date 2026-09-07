@@ -4,7 +4,9 @@
 $script:GovernancePreflightChecks = @(
     'area.orphan',            # source sub-area with no authored counterpart
     'tag.disallowed',         # a disallowed pattern family in use on source work items
-    'tag.unsanctioned',       # a tag outside the vocabulary in use on source work items
+    'tag.boardColumn',        # a tag that names a process stage: becomes a board column
+    'tag.retire',             # a tag declared for removal, no replacement
+    'tag.unsanctioned',       # a tag outside the vocabulary with no destination decided yet
     'repo.orphan',            # a source repo with no authored name under the node
     'member.unresolvable',    # an authored role-list UPN the target org cannot resolve
     'teamAdmin.unresolvable', # an authored team admin UPN the target org cannot resolve
@@ -98,7 +100,9 @@ function Resolve-GovernancePreflightFindings {
     if ($Slice.Tags) {
         & $say 'section' 'Tags'
         $tagVerdict = Test-GovernanceTagCompliance -Sanctioned @($Slice.Tags.sanctioned) `
-            -DisallowedPatterns @($Slice.Tags.disallowedPatterns) -LiveTagNames @($tagUsage.Keys)
+            -DisallowedPatterns @($Slice.Tags.disallowedPatterns) -LiveTagNames @($tagUsage.Keys) `
+            -BoardColumns @($Slice.Tags.boardColumns) -Retire @($Slice.Tags.retire) `
+            -SanctionedPatterns @($Slice.Tags.sanctionedPatterns)
         # Disallowed patterns exist to catch machine-generated families (build
         # ids, session ids) that run to thousands of distinct tags — one
         # finding per PATTERN, with usage and examples, is what a team can act
@@ -118,6 +122,30 @@ function Resolve-GovernancePreflightFindings {
             })
             & $say 'drift' "tag pattern '$($entry.Key)': $($names.Count) tag(s), $onItems work item(s) — e.g. $($examples -join ', ')"
         }
+        # A tag naming a process stage is a board column wearing a tag's
+        # clothes: the fix is a column, and the tag then stops being applied.
+        foreach ($t in $tagVerdict.BoardColumns) {
+            $n = & $tagCount $t
+            & $add ([ordered]@{
+                class     = 'drift'
+                check     = 'tag.boardColumn'
+                subject   = $t
+                workItems = $n
+                message   = "DRIFT tag '$t': names a process stage, so it belongs as a board column rather than a tag (in use on $n work item(s) under $srcArea)"
+            })
+            & $say 'drift' "tag -> board column: $t ($n work item(s))"
+        }
+        foreach ($t in $tagVerdict.Retire) {
+            $n = & $tagCount $t
+            & $add ([ordered]@{
+                class     = 'drift'
+                check     = 'tag.retire'
+                subject   = $t
+                workItems = $n
+                message   = "DRIFT tag '$t': declared for retirement, remove it with no replacement (in use on $n work item(s) under $srcArea)"
+            })
+            & $say 'drift' "tag -> retire: $t ($n work item(s))"
+        }
         foreach ($t in $tagVerdict.Unsanctioned) {
             $n = & $tagCount $t
             & $add ([ordered]@{
@@ -125,12 +153,18 @@ function Resolve-GovernancePreflightFindings {
                 check     = 'tag.unsanctioned'
                 subject   = $t
                 workItems = $n
-                message   = "AUDIT EXCEPTION tag: $t (in use on $n work item(s) under $srcArea)"
+                message   = "AUDIT EXCEPTION tag: $t (in use on $n work item(s) under $srcArea — no destination decided: sanction it, make it a board column, or retire it)"
             })
             & $say 'orphan' "tag: $t ($n work item(s))"
         }
         foreach ($t in ($tagVerdict.Missing | Sort-Object)) {
             $info.Add("sanctioned tag not in use at the source (apply seeds it in the target): $t")
+        }
+        # Sanctioned families are accepted, so they are context, never findings.
+        foreach ($entry in $tagVerdict.SanctionedByPattern.GetEnumerator()) {
+            $names   = @($entry.Value.tags)
+            $onItems = ($names | ForEach-Object { & $tagCount $_ } | Measure-Object -Sum).Sum
+            $info.Add("sanctioned tag family '$($entry.Key)': $($names.Count) tag(s) on $onItems work item(s), accepted as-is$(if ($entry.Value.note) { " — $($entry.Value.note)" })")
         }
         & $say 'ok' "$($tagVerdict.OkCount) sanctioned tag(s) in use across $($Data.workItems.count) work item(s)"
     }

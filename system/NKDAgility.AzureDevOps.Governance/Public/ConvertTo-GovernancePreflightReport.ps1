@@ -102,6 +102,8 @@ function ConvertTo-GovernancePreflightReport {
     $orphanSet  = @{}; foreach ($f in @(if ($byCheck.ContainsKey('area.orphan')) { $byCheck['area.orphan'] })) { $orphanSet[[string]$f.source] = $true }
     $families   = @(if ($byCheck.ContainsKey('tag.disallowed')) { $byCheck['tag.disallowed'] })
     $unsanct    = @(if ($byCheck.ContainsKey('tag.unsanctioned')) { $byCheck['tag.unsanctioned'] })
+    $asColumn   = @(if ($byCheck.ContainsKey('tag.boardColumn')) { $byCheck['tag.boardColumn'] })
+    $toRetire   = @(if ($byCheck.ContainsKey('tag.retire')) { $byCheck['tag.retire'] })
     $famTags    = ($families | ForEach-Object { [long]$_.tags }      | Measure-Object -Sum).Sum
     $famItems   = ($families | ForEach-Object { [long]$_.workItems } | Measure-Object -Sum).Sum
     $teamsDecl  = @($data.source.teams | Where-Object { $_ }).Count -gt 0
@@ -154,7 +156,9 @@ function ConvertTo-GovernancePreflightReport {
     $catalogue = @(
         @{ check = 'area.orphan';            label = 'Area paths not authored in the target';      result = { "$(& $n (& $count 'area.orphan')) of $(& $n $subAreas.Count) sub-areas" } },
         @{ check = 'tag.disallowed';         label = 'Tags: machine-generated families';           result = { if ($families.Count) { "$($families.Count) families, $(& $n $famTags) tags on $(& $n $famItems) work items" } else { 'none' } } },
-        @{ check = 'tag.unsanctioned';       label = 'Tags outside the vocabulary';                result = { "$(& $n $unsanct.Count) tags" } },
+        @{ check = 'tag.boardColumn';        label = 'Tags that become board columns';             result = { if ($asColumn.Count) { "$(& $n $asColumn.Count) tags" } else { 'none declared' } } },
+        @{ check = 'tag.retire';             label = 'Tags to retire outright';                    result = { if ($toRetire.Count) { "$(& $n $toRetire.Count) tags" } else { 'none declared' } } },
+        @{ check = 'tag.unsanctioned';       label = 'Tags with no destination decided';           result = { "$(& $n $unsanct.Count) tags" } },
         @{ check = 'repo.orphan';            label = 'Repositories not authored';                  result = { if (-not $reposDecl) { 'not checked — no repository filter declared' } else { "$(& $n $repoOrph.Count) of $(& $n @($data.repos).Count) repos" } } },
         @{ check = 'member.unresolvable';    label = 'Authored people the target cannot resolve';  result = { if ($unresolved.Count) { "$(& $n $unresolved.Count) of $(& $n $authoredN)" } else { "pass — $(& $n $authoredN) authored, all resolve" } } },
         @{ check = 'member.unauthored';      label = 'People in the source team today, not authored'; result = { if (-not $teamsDecl) { 'not checked — no source teams declared' } elseif ($unauth.Count) { "$(& $n $unauth.Count) of $(& $n @($data.population.Keys).Count)" } else { "pass — $(& $n @($data.population.Keys).Count) people, all authored" } } }
@@ -170,8 +174,8 @@ function ConvertTo-GovernancePreflightReport {
     & $table $hdr @($rows)
 
     # 1. Area paths
-    $L.Add("## 1. Area paths — $(& $n $subAreas.Count) sub-areas, $(& $n (& $count 'area.orphan')) not authored"); $L.Add('')
-    $L.Add('Work items are those sitting directly on each path. A sub-area that is not authored in the target has no node to land on.'); $L.Add('')
+    $L.Add("## 1. Area paths that fold to tags — $(& $n (& $count 'area.orphan')) of $(& $n $subAreas.Count) sub-areas"); $L.Add('')
+    $L.Add('An area path in the target means one thing: who answers for the work. A sub-area that is not authored has no node to land on, so it folds — to a tag, or to nothing. Work items are those sitting directly on each path.'); $L.Add('')
     $areaRows = foreach ($a in ($areas | Sort-Object { -[long]$_.workItems }, { [string]$_.source })) {
         $src  = [string]$a.source
         $name = if ($src -eq $srcRoot) { '*(root)*' } else { $src.Substring($srcRoot.Length + 1) }
@@ -189,7 +193,18 @@ function ConvertTo-GovernancePreflightReport {
         $famRows = foreach ($f in ($families | Sort-Object { -[long]$_.tags })) { , @("``$($f.subject)``", (& $n $f.tags), (& $n $f.workItems), (@($f.examples | Select-Object -First 3) -join ', ')) }
         & $table @('Pattern', 'Distinct tags', 'Work items', 'Examples') @($famRows)
     }
-    $L.Add("### 2b. Tags outside the vocabulary — $(& $n $unsanct.Count)"); $L.Add('')
+    if ($asColumn.Count -gt 0) {
+        $L.Add("### 2b. Tags that become board columns — $(& $n $asColumn.Count)"); $L.Add('')
+        $L.Add('These name where work has got to, not what it is. A board column carries that, and the tag stops being applied once the column exists — so this is a board change, not a vocabulary decision.'); $L.Add('')
+        & $table @('Uses', 'Tag') @(foreach ($t in ($asColumn | Sort-Object { -[long]$_.workItems }, { [string]$_.subject })) { , @((& $n $t.workItems), $t.subject) })
+    }
+    if ($toRetire.Count -gt 0) {
+        $L.Add("### 2c. Tags to retire outright — $(& $n $toRetire.Count)"); $L.Add('')
+        $L.Add('Declared for removal with no replacement. Nothing depends on them.'); $L.Add('')
+        & $table @('Uses', 'Tag') @(foreach ($t in ($toRetire | Sort-Object { -[long]$_.workItems }, { [string]$_.subject })) { , @((& $n $t.workItems), $t.subject) })
+    }
+    $L.Add("### 2d. Tags with no destination decided — $(& $n $unsanct.Count)"); $L.Add('')
+    $L.Add('Each of these needs one of three answers: **sanction** it into the vocabulary, make it a **board column**, or **retire** it. Anything still undecided at migration is an exception in the target from day one.'); $L.Add('')
     if ($unsanct.Count -gt 0) {
         $buckets = [ordered]@{ '1 work item' = 0; '2 to 5' = 0; '6 to 20' = 0; '21 to 50' = 0; 'more than 50' = 0 }
         foreach ($t in $unsanct) {
@@ -199,7 +214,7 @@ function ConvertTo-GovernancePreflightReport {
         }
         & $table @('Used on', 'Distinct tags') @(foreach ($k in $buckets.Keys) { , @($k, (& $n $buckets[$k])) })
         $cands = @($unsanct | Where-Object { [long]$_.workItems -gt $threshold } | Sort-Object { -[long]$_.workItems }, { [string]$_.subject })
-        $L.Add("Tags used on more than $(& $n $threshold) work items — the candidates for the vocabulary ($(& $n $cands.Count)):"); $L.Add('')
+        $L.Add("Tags used on more than $(& $n $threshold) work items — decide these first ($(& $n $cands.Count)):"); $L.Add('')
         if ($cands.Count -gt 0) { & $table @('Uses', 'Tag') @(foreach ($t in $cands) { , @((& $n $t.workItems), $t.subject) }) }
         else { $L.Add('None.'); $L.Add('') }
     }

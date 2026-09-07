@@ -114,6 +114,55 @@ Describe 'Test-GovernanceTagCompliance' {
         }
     }
 
+    It 'routes each tag to one destination, in precedence order' {
+        InModuleScope NKDAgility.AzureDevOps.Governance {
+            $r = Test-GovernanceTagCompliance `
+                -Sanctioned @('Backlog', 'ELITE_SUBMISSION') `
+                -BoardColumns @('Test passed', 'Kicked off') `
+                -Retire @('junk') `
+                -DisallowedPatterns @('^\d+$') `
+                -LiveTagNames @('Backlog', 'ELITE_SUBMISSION', 'Test passed', 'Kicked off', 'junk', '42', 'Undecided')
+            $r.BoardColumns | Should -Be @('Kicked off', 'Test passed')
+            $r.Retire       | Should -Be @('junk')
+            $r.Unsanctioned | Should -Be @('Undecided')   # only what has no destination
+            $r.Disallowed   | Should -Be @('42')
+            $r.OkCount      | Should -Be 2                # an immovable tag is SANCTIONED, not a fourth state
+        }
+    }
+
+    It 'accepts a family by pattern, so a per-season marker is never undecided' {
+        InModuleScope NKDAgility.AzureDevOps.Governance {
+            $r = Test-GovernanceTagCompliance -Sanctioned @('Backlog') `
+                -SanctionedPatterns @(@{ pattern = '^\d{4}S\d+(Committed|Streach)$'; note = 'moving to iteration path' }) `
+                -LiveTagNames @('Backlog', '2025S3Committed', '2026S1Streach', 'Undecided')
+            $r.OkCount      | Should -Be 3       # Backlog + both season markers
+            $r.Unsanctioned | Should -Be @('Undecided')
+            $r.Missing      | Should -BeNullOrEmpty   # a pattern is never "missing" - apply cannot seed it
+            @($r.SanctionedByPattern.Keys)                              | Should -HaveCount 1
+            $r.SanctionedByPattern['^\d{4}S\d+(Committed|Streach)$'].tags | Should -Be @('2025S3Committed', '2026S1Streach')
+            $r.SanctionedByPattern['^\d{4}S\d+(Committed|Streach)$'].note | Should -Be 'moving to iteration path'
+        }
+    }
+
+    It 'takes a bare regex string for a sanctioned family too' {
+        InModuleScope NKDAgility.AzureDevOps.Governance {
+            $r = Test-GovernanceTagCompliance -SanctionedPatterns @('^rel-\d+$') -LiveTagNames @('rel-7', 'other')
+            $r.OkCount      | Should -Be 1
+            $r.Unsanctioned | Should -Be @('other')
+        }
+    }
+
+    It 'lets a disallowed pattern win over a disposition, and sanctioned win over both dispositions' {
+        InModuleScope NKDAgility.AzureDevOps.Governance {
+            $r = Test-GovernanceTagCompliance -Sanctioned @('Keep') -BoardColumns @('Keep', '7') `
+                -Retire @('Keep') -DisallowedPatterns @('^\d+$') -LiveTagNames @('Keep', '7')
+            $r.OkCount      | Should -Be 1
+            $r.Disallowed   | Should -Be @('7')
+            $r.BoardColumns | Should -BeNullOrEmpty
+            $r.Retire       | Should -BeNullOrEmpty
+        }
+    }
+
     It 'disallowed patterns win over the sanctioned list' {
         InModuleScope NKDAgility.AzureDevOps.Governance {
             $r = Test-GovernanceTagCompliance -Sanctioned @('123') `
@@ -298,7 +347,8 @@ Describe 'Resolve-GovernancePreflightFindings' {
         InModuleScope NKDAgility.AzureDevOps.Governance -Parameters @{ resolved = $script:resolved; data = $script:fndData } {
             param($resolved, $data)
             $slice = Select-GovernanceSubtree -Resolved $resolved -Code 'PTL-FND'
-            $slice.Tags = @{ sanctioned = @('Backlog', 'Triage'); disallowedPatterns = @('^P\d{4}(_\d+)*-I\d+') }
+            $slice.Tags = @{ sanctioned = @('Backlog', 'Triage'); disallowedPatterns = @('^P\d{4}(_\d+)*-I\d+')
+                             boardColumns = @('Rogue') }
             $r = Resolve-GovernancePreflightFindings -Data $data -Slice $slice
 
             $byCheck = @{}
@@ -321,8 +371,12 @@ Describe 'Resolve-GovernancePreflightFindings' {
             $family.examples  | Should -Be @('P2026_1_0-I23215', 'P2025_1_0-I3800')
             @($byCheck['tag.disallowed']).Count | Should -Be 1   # one finding per pattern, not per tag
 
-            $byCheck['tag.unsanctioned'][0].subject   | Should -Be 'Rogue'
-            $byCheck['tag.unsanctioned'][0].workItems | Should -Be 7
+            # 'Rogue' is declared as a board column, so it is that finding and
+            # NOT an undecided one.
+            $byCheck['tag.boardColumn'][0].subject   | Should -Be 'Rogue'
+            $byCheck['tag.boardColumn'][0].workItems | Should -Be 7
+            $byCheck['tag.boardColumn'][0].class     | Should -Be 'drift'
+            $byCheck.Keys | Should -Not -Contain 'tag.unsanctioned'
             $byCheck['teamAdmin.unresolvable'][0].suggestions | Should -Be @('ghosting@example.com')
             $byCheck['member.unauthored'][0].subject    | Should -Be 'nobody@example.com'
             $byCheck['member.unauthored'][0].sourceTeam | Should -Be 'Foundation Crew'
@@ -459,6 +513,25 @@ Describe 'ConvertTo-GovernancePreflightReport' {
         $audit = Join-Path $script:renderDir 'audit.json'
         Set-Content $audit '{"mode":"Audit","findings":[]}'
         { ConvertTo-GovernancePreflightReport -DataPath $script:renderData -FindingsPath $audit } | Should -Throw "*not a preflight findings document*"
+    }
+}
+
+Describe 'taxonomy.yaml tag dispositions' {
+
+    It 'resolves boardColumns and retire into the model' {
+        InModuleScope NKDAgility.AzureDevOps.Governance -Parameters @{ resolved = $script:resolved } {
+            param($resolved)
+            $resolved.tags.PSObject.Properties.Name + @($resolved.tags.Keys) | Should -Contain 'boardColumns'
+        }
+    }
+
+    It 'refuses a tag that is given two destinations' {
+        InModuleScope NKDAgility.AzureDevOps.Governance {
+            $tax = @{ tags = @{ sanctioned = @('Shared'); boardColumns = @('Shared') } }
+            { Resolve-Governance -Manifest @{ program = 'P'; org = 'o' } -Source @{ products = @() } `
+                -Access @{} -Members @{} -SourceHash 'x' -Taxonomy $tax } |
+                Should -Throw "*'Shared' is in both 'sanctioned' and 'boardColumns'*"
+        }
     }
 }
 

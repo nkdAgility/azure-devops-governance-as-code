@@ -9,8 +9,14 @@
 #     sanctioned         allowed tags. Missing ones are MISSING findings and are
 #                        seeded by apply; anything in ADO that is not listed is
 #                        an audit exception.
+#     boardColumns       tags that name where work has GOT TO rather than what it
+#                        is — a board column wearing a tag's clothes (ADR-011).
+#     retire             tags to delete outright, nothing depends on them.
 #     disallowedPatterns regexes that are ALWAYS drift (build-id-shaped noise),
 #                        checked before the sanctioned list.
+#
+#   Precedence: disallowed pattern, sanctioned, board column, retire, then
+#   undecided. A tag may appear in only one of the three lists.
 #     anchor             how apply makes a sanctioned tag exist. ADO has no
 #                        create-tag API and purges tags no work item references,
 #                        so the vocabulary is held on one governed work item
@@ -27,6 +33,9 @@ tags:
     - Stakeholders
     - Open API
     - Spike
+  boardColumns:
+    - Kicked off
+  retire: []
   disallowedPatterns:
     - '^\d+$'             # bare build numbers
     - '^(build|bld)[-_ ]' # build-id prefixed

@@ -172,6 +172,8 @@ Declared in `programs/<name>/systems.yaml`; applied per node with `systems: [<na
 Declared in `programs/<name>/taxonomy.yaml`, not `hierarchy.yaml` — a flat list of allowed strings is not part of the product/team tree. A `tags:` block left behind in `hierarchy.yaml` **fails the build** with a migration hint.
 
 - Every tag in `tags.sanctioned` **exists** in the project. A sanctioned tag that does not exist is a `MISSING tag` finding.
+- `tags.sanctionedPatterns` accepts families that cannot be listed by name (a per-season marker). Matches are compliant, are never `MISSING` (apply cannot seed a pattern) and are never reported as undecided.
+- `tags.boardColumns` and `tags.retire` record where an unsanctioned tag is *going* (ADR-011) — preflight reports them separately from the undecided ones. Both are still exceptions in the target, which is correct: by then they should be gone. A tag in more than one of the three lists fails the build.
 - Tags matching `tags.disallowedPatterns` (build-id-shaped noise) are **always** drift, checked before the sanctioned list.
 - Tags that are neither sanctioned nor disallowed are audit exceptions.
 
@@ -301,6 +303,7 @@ Key decisions are recorded in `.agents/decisions/`. Read these before making str
 | [ADR-008](decisions/ADR-008-preflight-data-then-analysis.md) | Preflight gathers a facts-only data document first and analyses it offline — findings are objects with stable check ids, engagement vocabulary attached via `sources.yaml labels:`, disallowed tag families bundled per pattern |
 | [ADR-009](decisions/ADR-009-preflight-report-orchestration.md) | The renderer owns the per-team fix report; agents write one observations fragment; the engine ships `/audit-preflight`, its workflow, subagents, skill and a deny-apply hook as managed `.claude/` templates |
 | [ADR-010](decisions/ADR-010-preflight-migration-query-scope.md) | The migration query is a committed WIQL fragment in `sources.yaml scope:`, shared with the migration toolchain, and it scopes what preflight validates |
+| [ADR-011](decisions/ADR-011-tag-dispositions.md) | `taxonomy.yaml` records a destination per unsanctioned tag — `boardColumns`, `retire`, or undecided — plus `sanctionedPatterns` for families minted per season; no "tolerated" state, because the audit knows only the sanctioned list |
 
 ---
 

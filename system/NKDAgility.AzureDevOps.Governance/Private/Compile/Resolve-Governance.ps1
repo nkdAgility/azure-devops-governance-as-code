@@ -636,10 +636,40 @@ function Resolve-Governance {
                "same 'sanctioned:' and 'disallowedPatterns:' lists) and remove it from hierarchy.yaml.")
     }
     if ($Taxonomy -and $Taxonomy.tags) {
+        # boardColumns and retire are DISPOSITIONS (ADR-011): a tag in use that
+        # is not sanctioned still has to go somewhere, and "which somewhere" is
+        # a decision worth recording rather than re-deriving per team.
+        # sanctionedPatterns: families that are legitimately in use but cannot be
+        # enumerated - a per-season marker mints a new name every season, so a
+        # fixed list would report a growing pile of "undecided" tags forever.
+        # Each entry is a regex string, or { pattern, note } where the note
+        # carries WHY (e.g. transitional, on its way to an iteration path).
+        $sanctionedPatterns = @(foreach ($p in @($Taxonomy.tags.sanctionedPatterns | Where-Object { $_ })) {
+                if ($p -is [System.Collections.IDictionary]) {
+                    if (-not $p.pattern) { throw "taxonomy.yaml: a sanctionedPatterns entry is missing 'pattern'." }
+                    [ordered]@{ pattern = [string]$p.pattern; note = [string]$p.note }
+                }
+                else { [ordered]@{ pattern = [string]$p; note = '' } }
+            })
         $resolved['tags'] = [ordered]@{
             sanctioned         = @($Taxonomy.tags.sanctioned | Where-Object { $_ })
+            sanctionedPatterns = $sanctionedPatterns
+            boardColumns       = @($Taxonomy.tags.boardColumns | Where-Object { $_ })
+            retire             = @($Taxonomy.tags.retire | Where-Object { $_ })
             disallowedPatterns = @($Taxonomy.tags.disallowedPatterns | Where-Object { $_ })
             anchor             = Resolve-TagAnchor -Anchor $Taxonomy.tags.anchor
+        }
+        # One tag, one destination. Overlap is a config error, not a precedence
+        # puzzle for whoever reads the report.
+        $seen = @{}
+        foreach ($bucket in 'sanctioned', 'boardColumns', 'retire') {
+            foreach ($t in $resolved['tags'][$bucket]) {
+                $k = [string]$t
+                if ($seen.ContainsKey($k)) {
+                    throw "taxonomy.yaml: tag '$k' is in both '$($seen[$k])' and '$bucket'. A tag has one destination - sanction it, make it a board column, or retire it."
+                }
+                $seen[$k] = $bucket
+            }
         }
     }
 

@@ -84,23 +84,55 @@ function Test-GovernanceTagCompliance {
         so a caller can report a machine-generated family — build ids,
         session ids — as ONE finding instead of one per tag. Patterns that
         caught nothing are absent.
+
+        BoardColumns and Retire are DISPOSITIONS for tags that are not in the
+        vocabulary (ADR-011). A tag naming where work has got to — "test
+        passed", "kicked off" — is a board column wearing a tag's clothes, and
+        the fix is a column, not a vocabulary entry. A tag that is simply noise
+        is retired. Whatever is left is Unsanctioned: in use, not sanctioned,
+        and with no destination decided yet — the actual worklist.
+
+        SanctionedPatterns covers families that are legitimately in use but
+        cannot be listed by name — a per-season marker mints a new one every
+        season. Matches count as OK, never as missing (apply cannot seed a
+        pattern) and never as undecided. Each entry is a regex string or
+        @{ pattern; note }; SanctionedByPattern groups the matches so a report
+        can show the family and say why it is tolerated.
+
+        Precedence: disallowed pattern, then sanctioned name, then sanctioned
+        pattern, then board column, then retire, then undecided.
     #>
     [CmdletBinding()]
     param(
         [AllowEmptyCollection()][string[]]$Sanctioned = @(),
         [AllowEmptyCollection()][string[]]$DisallowedPatterns = @(),
-        [AllowEmptyCollection()][string[]]$LiveTagNames = @()
+        [AllowEmptyCollection()][string[]]$LiveTagNames = @(),
+        [AllowEmptyCollection()][string[]]$BoardColumns = @(),
+        [AllowEmptyCollection()][string[]]$Retire = @(),
+        [AllowEmptyCollection()][object[]]$SanctionedPatterns = @()
     )
+
+    $sanctionedPatternList = @(foreach ($p in $SanctionedPatterns) {
+            if ($p -is [System.Collections.IDictionary]) { [pscustomobject]@{ pattern = [string]$p.pattern; note = [string]$p.note } }
+            else { [pscustomobject]@{ pattern = [string]$p; note = '' } }
+        }) | Where-Object { $_.pattern }
 
     $liveSet = [System.Collections.Generic.HashSet[string]]::new(
         [string[]]$LiveTagNames, [System.StringComparer]::OrdinalIgnoreCase)
     $sanctionedSet = [System.Collections.Generic.HashSet[string]]::new(
         [string[]]$Sanctioned, [System.StringComparer]::OrdinalIgnoreCase)
+    $columnSet = [System.Collections.Generic.HashSet[string]]::new(
+        [string[]]$BoardColumns, [System.StringComparer]::OrdinalIgnoreCase)
+    $retireSet = [System.Collections.Generic.HashSet[string]]::new(
+        [string[]]$Retire, [System.StringComparer]::OrdinalIgnoreCase)
 
     $missing      = @($Sanctioned | Where-Object { -not $liveSet.Contains($_) })
     $disallowed   = [System.Collections.Generic.List[string]]::new()
     $byPattern    = [ordered]@{}
     $unsanctioned = [System.Collections.Generic.List[string]]::new()
+    $asColumn     = [System.Collections.Generic.List[string]]::new()
+    $toRetire     = [System.Collections.Generic.List[string]]::new()
+    $bySanctionedPattern = [ordered]@{}
     $okCount      = 0
 
     foreach ($tagName in ($LiveTagNames | Sort-Object)) {
@@ -111,17 +143,38 @@ function Test-GovernanceTagCompliance {
             if (-not $byPattern.Contains($caughtBy)) { $byPattern[$caughtBy] = [System.Collections.Generic.List[string]]::new() }
             $byPattern[$caughtBy].Add($tagName)
         }
-        elseif (-not $sanctionedSet.Contains($tagName)) { $unsanctioned.Add($tagName) }
-        else                                            { $okCount++ }
+        elseif ($sanctionedSet.Contains($tagName)) { $okCount++ }
+        else {
+            $okPattern = $null
+            foreach ($sp in $sanctionedPatternList) { if ($tagName -match $sp.pattern) { $okPattern = $sp; break } }
+            if ($okPattern) {
+                $okCount++
+                if (-not $bySanctionedPattern.Contains($okPattern.pattern)) {
+                    $bySanctionedPattern[$okPattern.pattern] = [pscustomobject]@{
+                        note = $okPattern.note; tags = [System.Collections.Generic.List[string]]::new() }
+                }
+                $bySanctionedPattern[$okPattern.pattern].tags.Add($tagName)
+            }
+            elseif ($columnSet.Contains($tagName)) { $asColumn.Add($tagName) }
+            elseif ($retireSet.Contains($tagName)) { $toRetire.Add($tagName) }
+            else                                   { $unsanctioned.Add($tagName) }
+        }
     }
 
     $grouped = [ordered]@{}
     foreach ($p in $byPattern.Keys) { $grouped[$p] = @($byPattern[$p]) }
+    $groupedOk = [ordered]@{}
+    foreach ($p in $bySanctionedPattern.Keys) {
+        $groupedOk[$p] = [ordered]@{ note = $bySanctionedPattern[$p].note; tags = @($bySanctionedPattern[$p].tags) }
+    }
 
     return @{
         Missing             = $missing
         Disallowed          = @($disallowed)
         DisallowedByPattern = $grouped
+        SanctionedByPattern = $groupedOk
+        BoardColumns        = @($asColumn)
+        Retire              = @($toRetire)
         Unsanctioned        = @($unsanctioned)
         OkCount             = $okCount
     }

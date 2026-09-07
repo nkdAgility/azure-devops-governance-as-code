@@ -41,6 +41,22 @@ previously left alone, without a line of consumer code changing.
   report is already the team's fix report. Validated by `validate` and by
   preflight; unknown check ids and attempts to override engine fields fail.
 
+- **Tag dispositions** (ADR-011). A tag that is not sanctioned still needs a
+  destination, and which one decides who does the work, so `taxonomy.yaml`
+  gains `boardColumns` (it names where work has *got to* — "test passed",
+  "kicked off" — so a board column carries it and the tag stops being applied)
+  and `retire` (delete, nothing depends on it). Preflight reports those as
+  `tag.boardColumn` and `tag.retire`, and `tag.unsanctioned` now means *no
+  destination decided yet* — the team's actual worklist. A tag given two
+  destinations fails the build. There is deliberately no "tolerated" state: a
+  tag nobody can stop being applied must be **sanctioned**, or the target
+  audit flags it every day forever.
+- `taxonomy.yaml sanctionedPatterns:` — families that are legitimately in use
+  but cannot be listed by name, because a new one is minted every season.
+  Entries are a regex, or `{ pattern, note }` where the note records why (a
+  marker on its way to becoming an iteration path, say). Matches count as
+  compliant, are never "missing" (apply cannot seed a pattern) and never
+  undecided; the report lists the family and its note as context.
 - `sources.yaml scope:` — the **migration query** (ADR-010). A WIQL boolean
   fragment (`query`, plus an optional human `label`), at program level with an
   optional per-node override, narrowing preflight to the work items that are

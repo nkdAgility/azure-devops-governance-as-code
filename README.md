@@ -357,6 +357,33 @@ reporting:
   candidateTagMinUses: 20   # the bar every team is measured against
 ```
 
+### Every tag gets a destination
+
+A tag that is not in the vocabulary still has to go somewhere, and *which*
+somewhere decides who does the work. `taxonomy.yaml` records the decision:
+
+```yaml
+tags:
+  sanctioned:        [...]   # names what the work IS — it stays
+  boardColumns:      [...]   # names where work has GOT TO — becomes a column
+  retire:            [...]   # nothing depends on it — delete
+  sanctionedPatterns:        # a family minted fresh each season
+    - pattern: '^\d{4}S\d+(Committed|Stretch)$'
+      note:    "moving to iteration paths as teams adopt the new project"
+```
+
+"Test passed" and "Kicked off" are board columns wearing a tag's clothes;
+sanctioning them entrenches the workaround, and a column shows the stage at a
+glance instead. The report lists board columns, retirements and *undecided*
+separately, so the question a team answers is "which of three" rather than
+"what do you want to do about 549 tags". A tag given two destinations fails
+the build.
+
+There is deliberately **no "tolerated" state**. The audit knows only the
+sanctioned vocabulary, so a tag nobody can stop being applied — one stamped by
+tooling outside the team's control — must be sanctioned, or it is an exception
+every day forever and a `-Prune` deletion candidate.
+
 ### Noise is declared, not endured
 
 A legacy area can carry thousands of machine-generated tags — build ids, crash
@@ -536,6 +563,7 @@ The reasoning behind the non-obvious choices is recorded in
 | [ADR-008](.agents/decisions/ADR-008-preflight-data-then-analysis.md) | Preflight gathers a facts-only data document first, then analyses it offline |
 | [ADR-009](.agents/decisions/ADR-009-preflight-report-orchestration.md) | The renderer owns the fix report; agents write one observations fragment |
 | [ADR-010](.agents/decisions/ADR-010-preflight-migration-query-scope.md) | The migration query is a committed WIQL fragment, and it scopes preflight |
+| [ADR-011](.agents/decisions/ADR-011-tag-dispositions.md) | A tag that is not sanctioned still needs a destination: board column, retirement, or a decision |
 
 ---
 
