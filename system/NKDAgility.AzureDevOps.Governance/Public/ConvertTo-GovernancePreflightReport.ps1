@@ -175,14 +175,15 @@ function ConvertTo-GovernancePreflightReport {
 
     # 1. Area paths
     $L.Add("## 1. Area paths that fold to tags — $(& $n (& $count 'area.orphan')) of $(& $n $subAreas.Count) sub-areas"); $L.Add('')
-    $L.Add('An area path in the target means one thing: who answers for the work. A sub-area that is not authored has no node to land on, so it folds — to a tag, or to nothing. Work items are those sitting directly on each path.'); $L.Add('')
+    $L.Add('An area path in the target means one thing: who answers for the work. A sub-area that is authored has a node to land on and survives the move; one that is not folds — to a tag, or to nothing. Work items are those sitting directly on each path.'); $L.Add('')
     $areaRows = foreach ($a in ($areas | Sort-Object { -[long]$_.workItems }, { [string]$_.source })) {
-        $src  = [string]$a.source
-        $name = if ($src -eq $srcRoot) { '*(root)*' } else { $src.Substring($srcRoot.Length + 1) }
-        $st   = if ($src -eq $srcRoot) { 'root' } elseif ($orphanSet.ContainsKey($src)) { 'not authored' } else { 'authored' }
-        , @((& $n $a.workItems), $name, $st)
+        $src = [string]$a.source
+        $st  = if ($src -eq $srcRoot)            { 'the team root' }
+               elseif ($orphanSet.ContainsKey($src)) { 'folds — not authored' }
+               else                              { "authored as ``$([string]$a.target)``" }
+        , @((& $n $a.workItems), "``$src``", $st)
     }
-    & $table @('Work items', 'Sub-area', 'Target') @($areaRows)
+    & $table @('Work items', 'Area path today', 'In the target') @($areaRows)
 
     # 2. Tags
     $L.Add("## 2. Tags — $(& $n @($data.tags.Keys).Count) distinct tags in use"); $L.Add('')

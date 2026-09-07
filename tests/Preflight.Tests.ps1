@@ -462,9 +462,10 @@ Describe 'ConvertTo-GovernancePreflightReport' {
         $out = ConvertTo-GovernancePreflightReport -DataPath $script:renderData -FindingsPath $script:renderFind `
             -Reporting @{ standard = 'Fixture Standard'; candidateTagMinUses = 5 }
         $md = Get-Content $out -Raw
-        $md | Should -Match '\| 4 \| Plotting \| not authored \|'
-        $md | Should -Match '\| 3 \| Inbox \| authored \|'
-        $md | Should -Match '\| 5 \| \*\(root\)\* \| root \|'
+        # Full source paths, and the projected target path for anything authored.
+        $md | Should -Match ([regex]::Escape('| 4 | `\LegacyPortal\Foundation\Plotting` | folds — not authored |'))
+        $md | Should -Match ([regex]::Escape('| 3 | `\LegacyPortal\Foundation\Inbox` | authored as `\Odyssey\Portal\Platform\Foundation\Inbox` |'))
+        $md | Should -Match ([regex]::Escape('| 5 | `\LegacyPortal\Foundation` | the team root |'))
         $md | Should -Match '\| Area paths not authored in the target \| 1 of 2 sub-areas \| A2 \| 2 \| PM \|'
         $md | Should -Match '1 families, 2 tags on 4 work items'
         $md | Should -Match 'more than 5 work items'
