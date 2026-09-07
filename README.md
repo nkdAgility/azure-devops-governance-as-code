@@ -278,6 +278,34 @@ sources:
 It is **read-only against both organisations**, and exits non-zero on findings,
 the same CI contract as `audit`.
 
+### Scope it to what is actually moving
+
+A long-lived area is mostly archive. Validating tags and placement across work
+items nobody will migrate hands a team a fix list it should not be asked to
+act on, so `scope:` narrows the population to the **migration query** — the
+programme's own decision about what comes across:
+
+```yaml
+scope:
+  label: "2026.1 and onwards"
+  query: "[System.IterationPath] NOT UNDER 'Proj\\ARCHIVE'"
+```
+
+It is a WIQL boolean **fragment**, not a whole query: the engine supplies the
+project, area-path and paging clauses and ANDs yours into them in parentheses.
+A node may override the programme default with its own `scope:`.
+
+This is deliberately the same text your migration toolchain needs for its own
+work-item query, so one authored decision drives both. A saved Azure DevOps
+query is not accepted as the input — it is mutable state outside version
+control, and a report whose population depends on one is not reproducible
+evidence.
+
+The query is recorded in the gathered data and named in the report header, and
+changing it re-gathers rather than reusing a data file that describes a
+different population. **Run without it and the report says so** — "every work
+item under the area, archive included".
+
 ### Gather, then analyse
 
 The run splits in two, and the split is the point:
@@ -507,6 +535,7 @@ The reasoning behind the non-obvious choices is recorded in
 | [ADR-007](.agents/decisions/ADR-007-preflight-shared-evaluators.md) | Preflight evaluates projected pre-migration state through the audit's own evaluators |
 | [ADR-008](.agents/decisions/ADR-008-preflight-data-then-analysis.md) | Preflight gathers a facts-only data document first, then analyses it offline |
 | [ADR-009](.agents/decisions/ADR-009-preflight-report-orchestration.md) | The renderer owns the fix report; agents write one observations fragment |
+| [ADR-010](.agents/decisions/ADR-010-preflight-migration-query-scope.md) | The migration query is a committed WIQL fragment, and it scopes preflight |
 
 ---
 

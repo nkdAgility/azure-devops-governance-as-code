@@ -442,10 +442,78 @@ Describe 'ConvertTo-GovernancePreflightReport' {
         (& $strip $with) | Should -Be (& $strip $plain)
     }
 
+    It 'names the migration query in the header, and says so loudly when there is none' {
+        $unscoped = Get-Content (ConvertTo-GovernancePreflightReport -DataPath $script:renderData -FindingsPath $script:renderFind) -Raw
+        $unscoped | Should -Match '\*\*Work items in scope\*\* \| \*\*every work item under the area, archive included\*\* — no migration query declared'
+
+        $scopedData = Join-Path $script:renderDir 'scoped-data.json'
+        $d = Get-Content $script:renderData -Raw | ConvertFrom-Json -AsHashtable -Depth 20
+        $d['scope'] = [ordered]@{ query = "[System.IterationPath] NOT UNDER 'X\ARCHIVE'"; label = '2026.1 onwards' }
+        $d | ConvertTo-Json -Depth 20 | Set-Content $scopedData -Encoding utf8
+        $scoped = Get-Content (ConvertTo-GovernancePreflightReport -DataPath $scopedData -FindingsPath $script:renderFind) -Raw
+        $scoped | Should -Match '2026\.1 onwards — `\[System\.IterationPath\] NOT UNDER'
+        $scoped | Should -Not -Match 'no migration query declared'
+    }
+
     It 'refuses a findings document that is not a preflight report' {
         $audit = Join-Path $script:renderDir 'audit.json'
         Set-Content $audit '{"mode":"Audit","findings":[]}'
         { ConvertTo-GovernancePreflightReport -DataPath $script:renderData -FindingsPath $audit } | Should -Throw "*not a preflight findings document*"
+    }
+}
+
+Describe 'sources.yaml scope (the migration query)' {
+
+    It 'loads the fixture scope and accepts it' {
+        InModuleScope NKDAgility.AzureDevOps.Governance -Parameters @{ programPath = $script:programPath; resolved = $script:resolved } {
+            param($programPath, $resolved)
+            $source = Import-GovernanceSource -ProgramPath $programPath
+            $source.SourceScope.label | Should -Be 'the current release line'
+            $source.SourceScope.query | Should -Match 'NOT UNDER'
+            Test-GovernanceSources -Sources $source.Sources -Resolved $resolved -Scope $source.SourceScope | Should -BeNullOrEmpty
+        }
+    }
+
+    It 'rejects a whole query, an unknown field, and a missing query' {
+        InModuleScope NKDAgility.AzureDevOps.Governance -Parameters @{ resolved = $script:resolved } {
+            param($resolved)
+            $whole = @(Test-GovernanceSources -Sources $null -Resolved $resolved -Scope @{ query = "SELECT [System.Id] FROM WorkItems WHERE [System.State] = 'Active'" })
+            @($whole | Where-Object { $_ -like '*boolean FRAGMENT only*' }).Count | Should -Be 1
+
+            $odd = @(Test-GovernanceSources -Sources $null -Resolved $resolved -Scope @{ wiql = 'x' })
+            @($odd | Where-Object { $_ -like "*'wiql' is not a scope field*" }).Count | Should -Be 1
+            @($odd | Where-Object { $_ -like "*missing 'query'*" }).Count | Should -Be 1
+        }
+    }
+
+    It 'validates a per-node scope override the same way' {
+        InModuleScope NKDAgility.AzureDevOps.Governance -Parameters @{ resolved = $script:resolved } {
+            param($resolved)
+            $bad = @{ 'PTL-FND' = @{ org = 'o'; project = 'p'; areaPath = 'p\x'; scope = @{ query = 'ORDER BY [System.Id]' } } }
+            $issues = @(Test-GovernanceSources -Sources $bad -Resolved $resolved)
+            @($issues | Where-Object { $_ -like "*'PTL-FND' scope query must be a boolean FRAGMENT only*" }).Count | Should -Be 1
+        }
+    }
+
+    It 'ANDs the fragment into the WIQL wrapped in parentheses, and omits the clause when unset' {
+        InModuleScope NKDAgility.AzureDevOps.Governance {
+            $script:captured = [System.Collections.Generic.List[string]]::new()
+            Mock Invoke-AdoRest {
+                if ($Path -like '*wiql*') { $script:captured.Add([string]$Body.query); return @{ workItems = @() } }
+                return @{ value = @() }
+            }
+            Get-AdoWorkItemUsageUnderArea -OrgUrl 'https://x' -Project 'P' -AreaPath 'P\A' `
+                -Filter "[System.State] <> 'Closed' OR [System.Tag] CONTAINS 'keep'" | Out-Null
+            Get-AdoWorkItemUsageUnderArea -OrgUrl 'https://x' -Project 'P' -AreaPath 'P\A' | Out-Null
+
+            # -BeLike would read '[System.State]' as a wildcard character class,
+            # so compare literally.
+            $lit = { param($s) [regex]::Escape($s) }
+            # Parenthesised, so an authored OR cannot bind against the area predicate.
+            $script:captured[0] | Should -Match (& $lit "UNDER 'P\A' AND ([System.State] <> 'Closed' OR [System.Tag] CONTAINS 'keep') AND [System.Id] > 0")
+            $script:captured[1] | Should -Match (& $lit "UNDER 'P\A' AND [System.Id] > 0")
+            $script:captured[1] | Should -Not -Match '\(\)'
+        }
     }
 }
 
@@ -491,7 +559,11 @@ Describe 'Invoke-GovernancePreflight -SkipFresh' {
             $node = Join-Path $dir 'preflight\PTL-FND'
             New-Item -ItemType Directory -Path $node -Force | Out-Null
             $dataPath = Join-Path $node 'odyssey-preflight-PTL-FND-data.json'
-            $script:fndData | ConvertTo-Json -Depth 20 | Set-Content $dataPath -Encoding utf8
+            # Must carry the SAME migration query the fixture declares, or the
+            # scope-change check below correctly refuses to reuse it.
+            $scoped = $script:fndData | ConvertTo-Json -Depth 20 | ConvertFrom-Json -AsHashtable -Depth 20
+            $scoped['scope'] = [ordered]@{ query = "[System.IterationPath] NOT UNDER 'LegacyPortal\ARCHIVE'"; label = 'the current release line' }
+            $scoped | ConvertTo-Json -Depth 20 | Set-Content $dataPath -Encoding utf8
             $stamp = (Get-Item $dataPath).LastWriteTimeUtc
             # No az session or PAT is arranged for this test: if the gather were
             # attempted, Initialize-AdoAuth would be the thing that fails.
@@ -502,6 +574,27 @@ Describe 'Invoke-GovernancePreflight -SkipFresh' {
             $json.findingCount | Should -BeGreaterThan 0
             @($json.findings | Where-Object check -eq 'preflight.error').Count | Should -Be 0
             (Get-Content (Join-Path $node 'odyssey-preflight-PTL-FND-findings.txt') -Raw) | Should -Match 'Data     : odyssey-preflight-PTL-FND-data.json'
+        } finally { Remove-Item $dir -Recurse -Force -ErrorAction SilentlyContinue }
+    }
+
+    It 'refuses to reuse data gathered under a different migration query' {
+        $dir = Join-Path ([System.IO.Path]::GetTempPath()) "gov-scopechange-$([guid]::NewGuid())"
+        New-Item -ItemType Directory -Path (Join-Path $dir 'preflight\PTL-FND') -Force | Out-Null
+        try {
+            $dataPath = Join-Path $dir 'preflight\PTL-FND\odyssey-preflight-PTL-FND-data.json'
+            $stale = $script:fndData | ConvertTo-Json -Depth 20 | ConvertFrom-Json -AsHashtable -Depth 20
+            $stale['scope'] = [ordered]@{ query = "[System.State] <> 'Closed'"; label = 'something else' }
+            $stale | ConvertTo-Json -Depth 20 | Set-Content $dataPath -Encoding utf8
+
+            # Recent, but gathered under a query the program no longer declares:
+            # -SkipFresh must re-gather, which here fails for want of a credential
+            # rather than silently reporting on the wrong population.
+            Invoke-GovernancePreflight -ProgramPath $script:programPath -ResolvedPath (Join-Path $dir 'resolved.yaml') `
+                -Code PTL-FND -SkipFresh -ErrorAction SilentlyContinue 6>$null 2>$null
+            $json = Get-Content (Join-Path $dir 'preflight\PTL-FND\odyssey-preflight-PTL-FND-findings.json') -Raw | ConvertFrom-Json
+            @($json.findings | Where-Object check -eq 'preflight.error').Count | Should -Be 1
+            # and the stale data file is left exactly as it was
+            (Get-Content $dataPath -Raw | ConvertFrom-Json).scope.label | Should -Be 'something else'
         } finally { Remove-Item $dir -Recurse -Force -ErrorAction SilentlyContinue }
     }
 }

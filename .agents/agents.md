@@ -300,6 +300,7 @@ Key decisions are recorded in `.agents/decisions/`. Read these before making str
 | [ADR-007](decisions/ADR-007-preflight-shared-evaluators.md) | Preflight evaluates projected pre-migration source state through the audit's own pure evaluators — shared rules, `sources.yaml` seed file, read-only against both orgs |
 | [ADR-008](decisions/ADR-008-preflight-data-then-analysis.md) | Preflight gathers a facts-only data document first and analyses it offline — findings are objects with stable check ids, engagement vocabulary attached via `sources.yaml labels:`, disallowed tag families bundled per pattern |
 | [ADR-009](decisions/ADR-009-preflight-report-orchestration.md) | The renderer owns the per-team fix report; agents write one observations fragment; the engine ships `/audit-preflight`, its workflow, subagents, skill and a deny-apply hook as managed `.claude/` templates |
+| [ADR-010](decisions/ADR-010-preflight-migration-query-scope.md) | The migration query is a committed WIQL fragment in `sources.yaml scope:`, shared with the migration toolchain, and it scopes what preflight validates |
 
 ---
 

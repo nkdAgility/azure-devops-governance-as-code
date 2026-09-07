@@ -58,7 +58,8 @@ function Invoke-GovernancePreflight {
     }
     $resolved = ConvertFrom-Yaml (Get-Content $ResolvedPath -Raw)
 
-    $issues = @(Test-GovernanceSources -Sources $source.Sources -Resolved $resolved -Labels $source.SourceLabels -Reporting $source.SourceReporting)
+    $issues = @(Test-GovernanceSources -Sources $source.Sources -Resolved $resolved -Labels $source.SourceLabels `
+        -Reporting $source.SourceReporting -Scope $source.SourceScope)
     if ($issues.Count -gt 0) {
         $issues | ForEach-Object { Write-Error $_ }
         throw "sources.yaml validation failed with $($issues.Count) issue(s)."
@@ -75,6 +76,12 @@ function Invoke-GovernancePreflight {
     $targetOrg     = if ($Org) { $Org } else { $manifest.org }
     $targetOrgUrl  = ConvertTo-AdoOrgUrl -Org $targetOrg
     $targetProject = if ($resolved.project -and $resolved.project.name) { $resolved.project.name } else { $resolved.program }
+    # The migration query, per node: the node's own scope, else the program's.
+    $scopeFor = { param($code)
+        $s = $source.Sources[$code]
+        if ($s.scope) { $s.scope } else { $source.SourceScope }
+    }
+
     # Decide per node whether to gather or reuse, BEFORE authenticating: when
     # every node reuses, no organisation is contacted at all.
     $reuse = @{}
@@ -82,6 +89,17 @@ function Invoke-GovernancePreflight {
         $dataPath = (Get-GovernancePreflightPaths -ResolvedPath $ResolvedPath -Code $nodeCode -Program (Split-Path -Leaf $ProgramPath)).Data
         $fresh = (Test-Path -LiteralPath $dataPath) -and (
             $MaxAgeHours -le 0 -or ((Get-Date) - (Get-Item -LiteralPath $dataPath).LastWriteTime).TotalHours -lt $MaxAgeHours)
+        # A data file gathered under a DIFFERENT migration query is a different
+        # population, however recent it is. Reusing it would silently report on
+        # work items the query no longer selects, so it is never fresh.
+        if ($fresh -and -not $Offline) {
+            $wantQuery = [string](& $scopeFor $nodeCode).query
+            $hadQuery = try { [string]((Get-Content -LiteralPath $dataPath -Raw | ConvertFrom-Json -AsHashtable -Depth 20).scope.query) } catch { $null }
+            if ($wantQuery -ne $hadQuery) {
+                Write-Host "  [info]    $nodeCode — the migration query changed since this data was gathered; re-gathering" -ForegroundColor DarkCyan
+                $fresh = $false
+            }
+        }
         $reuse[$nodeCode] = $Offline -or ($SkipFresh -and $fresh)
     }
     if (@($reuse.Values | Where-Object { -not $_ }).Count -gt 0) {
@@ -132,7 +150,8 @@ function Invoke-GovernancePreflight {
                 Write-Host "  [info]    data gathered $($data.gathered) from $($data.source.org)/$($data.source.project)" -ForegroundColor DarkCyan
             } else {
                 $data = Get-GovernancePreflightData -Code $nodeCode -Source $src -Slice $slice `
-                    -Program ([string]$resolved.program) -TargetOrgUrl $targetOrgUrl -TargetProject $targetProject
+                    -Program ([string]$resolved.program) -TargetOrgUrl $targetOrgUrl -TargetProject $targetProject `
+                    -Scope (& $scopeFor $nodeCode)
                 # Only a complete gather may replace the previous data file.
                 $data | ConvertTo-Json -Depth 20 | Set-Content -LiteralPath $dataPath -Encoding utf8
                 Write-Host "  [info]    data written to: $dataPath ($($data.workItems.count) work item(s), $(@($data.areas).Count) area path(s), $(@($data.tags.Keys).Count) tag(s))" -ForegroundColor DarkCyan

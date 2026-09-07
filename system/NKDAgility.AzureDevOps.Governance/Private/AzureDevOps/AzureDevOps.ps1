@@ -1734,12 +1734,21 @@ function Get-AdoWorkItemUsageUnderArea {
            AreaPaths = path -> count (as WIQL reports it, no leading '\');
            WorkItemCount = n }. Read-only; failures throw — a half-counted
         vocabulary must never present as the whole one.
+
+        Filter is an optional WIQL boolean FRAGMENT (not a whole query) ANDed
+        into the WHERE clause, so a programme can narrow the population to the
+        work items actually migrating — a legacy area is mostly archive, and
+        validating tags across work nobody will move produces a fix list no
+        team should be asked to act on. It is wrapped in parentheses: without
+        them an authored 'A OR B' would bind against the area predicate and
+        silently widen the query beyond the subtree.
     #>
     [CmdletBinding()]
     param(
         [Parameter(Mandatory)][string]$OrgUrl,
         [Parameter(Mandatory)][string]$Project,
-        [Parameter(Mandatory)][string]$AreaPath
+        [Parameter(Mandatory)][string]$AreaPath,
+        [string]$Filter = ''
     )
     $tags       = @{}
     $iterations = @{}
@@ -1751,8 +1760,10 @@ function Get-AdoWorkItemUsageUnderArea {
     $pageSize   = 19999   # WIQL flat queries cap at 20000 results
     $lastId     = 0
 
+    $scopeClause = if ([string]::IsNullOrWhiteSpace($Filter)) { '' } else { " AND ($Filter)" }
+
     while ($true) {
-        $wiql = "SELECT [System.Id] FROM WorkItems WHERE [System.TeamProject] = '$escProject' AND [System.AreaPath] UNDER '$escArea' AND [System.Id] > $lastId ORDER BY [System.Id] ASC"
+        $wiql = "SELECT [System.Id] FROM WorkItems WHERE [System.TeamProject] = '$escProject' AND [System.AreaPath] UNDER '$escArea'$scopeClause AND [System.Id] > $lastId ORDER BY [System.Id] ASC"
         $page = Invoke-AdoRest -OrgUrl $OrgUrl -Path "$Project/_apis/wit/wiql?`$top=$pageSize" `
             -Method 'POST' -Body @{ query = $wiql }
         $ids  = @(@($page.workItems) | ForEach-Object { [int]$_.id })

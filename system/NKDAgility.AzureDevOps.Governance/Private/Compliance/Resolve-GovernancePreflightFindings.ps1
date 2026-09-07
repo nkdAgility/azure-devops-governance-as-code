@@ -220,6 +220,11 @@ function Resolve-GovernancePreflightFindings {
     }
 
     # ── 5. Migration-mapping context (never findings) ─────────────────────────
+    if ($Data.scope -and $Data.scope.query) {
+        $info.Add("counts cover the work items the migration query selects$(if ($Data.scope.label) { " ($($Data.scope.label))" }): $($Data.scope.query)")
+    } else {
+        $info.Add('no migration query declared, so every work item under the area was counted, archive included — declare sources.yaml scope: to validate only what is actually moving')
+    }
     $info.Add("$($Data.workItems.count) work item(s) under $srcArea at the source")
     $iterations = $Data.iterations
     if ($iterations) {

@@ -125,6 +125,16 @@ function ConvertTo-GovernancePreflightReport {
     # invariantly so the document is the same bytes on every machine.
     $gathered = if ($data.gathered -is [datetime]) { ([datetime]$data.gathered).ToUniversalTime().ToString("yyyy-MM-dd HH:mm 'UTC'", $inv) } else { [string]$data.gathered }
     $head.Add(@('**Data gathered**', $gathered))
+    # Never let a reader guess which work items these counts cover. An
+    # unscoped run includes archive nobody will migrate, and saying so is the
+    # prompt that gets the migration query written.
+    $scopeCell = if ($data.scope -and $data.scope.query) {
+        $lbl = [string]$data.scope.label
+        "$(if ($lbl) { "$lbl — " })``$([string]$data.scope.query)``"
+    } else {
+        '**every work item under the area, archive included** — no migration query declared'
+    }
+    $head.Add(@('**Work items in scope**', $scopeCell))
     if ($Reporting -and $Reporting.standard) { $head.Add(@('**Standard**', [string]$Reporting.standard)) }
     if ($Reporting -and $Reporting.audience) { $head.Add(@('**Audience**', [string]$Reporting.audience)) }
     $result = if ($errors.Count -gt 0) { "**ERROR** — the gather did not complete; see Errors" }

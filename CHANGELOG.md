@@ -41,6 +41,18 @@ previously left alone, without a line of consumer code changing.
   report is already the team's fix report. Validated by `validate` and by
   preflight; unknown check ids and attempts to override engine fields fail.
 
+- `sources.yaml scope:` — the **migration query** (ADR-010). A WIQL boolean
+  fragment (`query`, plus an optional human `label`), at program level with an
+  optional per-node override, narrowing preflight to the work items that are
+  actually migrating instead of every item under the area including archive.
+  The engine supplies the project, area-path and paging clauses and ANDs the
+  fragment into them **in parentheses**; `validate` rejects a whole query
+  (`SELECT`, `FROM WorkItem`, `ORDER BY`, `;`). It is the same text the
+  migration toolchain needs for its own work-item query, so one authored
+  decision drives both. The query is recorded in `-data.json` and named in the
+  report header; `-SkipFresh` re-gathers when it changes, because a file
+  gathered under a different query describes a different population. A run
+  with no query says so in the header rather than looking scoped.
 - **Preflight artefacts move into `<output>\preflight\<CODE>\`**, named
   `<program>-preflight-<CODE>-{data.json,findings.txt,findings.json,observations.md,report.md}`,
   with the run summary at `<output>\preflight\<program>-preflight-summary.md`.

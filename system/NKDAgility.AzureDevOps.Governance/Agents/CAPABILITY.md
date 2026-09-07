@@ -44,6 +44,13 @@ organisation, and reconciled.
   per check so the JSON is already the team's fix report. Disallowed tag patterns are one
   finding per pattern with counts and examples. Non-zero exit on findings, same CI
   contract as audit.
+- **`sources.yaml scope:` is the migration query, and it decides what gets validated.**
+  A WIQL boolean *fragment* (never a whole query — the engine owns the project, area and
+  paging clauses and ANDs yours in parentheses), at program level or per node. Without it
+  preflight counts every work item under the area including archive, and the report says
+  so in its header. It is the same text the migration toolchain needs, so author it once.
+  Changing it re-gathers: `-SkipFresh` will not reuse a data file recorded under a
+  different query, because that is a different population.
 - **The fix report is rendered, never written.** `preflight-report` turns each team's
   data + findings files into `-report.md` deterministically; every count and table in it
   is copied from those files. The one section anyone else writes is `-observations.md`,

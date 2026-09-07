@@ -67,12 +67,14 @@ function Import-GovernanceSource {
     $sources      = $null
     $sourceLabels    = $null   # optional `labels:` — engagement fields attached per preflight check id (ADR-008)
     $sourceReporting = $null   # optional `reporting:` — how the rendered fix report is framed (ADR-009)
+    $sourceScope     = $null   # optional `scope:` — the migration query narrowing what is validated (ADR-010)
     if (Test-Path $sourcesPath) {
         $sourcesRaw = Get-Content -Path $sourcesPath -Raw
         $parsed     = ConvertFrom-Yaml $sourcesRaw
         if ($parsed -and $parsed.sources)   { $sources         = $parsed.sources }
         if ($parsed -and $parsed.labels)    { $sourceLabels    = $parsed.labels }
         if ($parsed -and $parsed.reporting) { $sourceReporting = $parsed.reporting }
+        if ($parsed -and $parsed.scope)     { $sourceScope     = $parsed.scope }
     }
 
     $bytes  = [System.Text.Encoding]::UTF8.GetBytes($manifestRaw + $hierarchyRaw + $accessRaw + $membersRaw + $taxonomyRaw + $systemsRaw + $sourcesRaw)
@@ -109,6 +111,7 @@ function Import-GovernanceSource {
         Sources      = $sources
         SourceLabels    = $sourceLabels
         SourceReporting = $sourceReporting
+        SourceScope     = $sourceScope
         TeamIds      = $teamIds
         TeamIdsPath  = $teamIdsPath
     }

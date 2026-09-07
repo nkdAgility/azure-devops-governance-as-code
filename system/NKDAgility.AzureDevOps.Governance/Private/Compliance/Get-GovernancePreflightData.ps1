@@ -22,7 +22,8 @@ function Get-GovernancePreflightData {
         [Parameter(Mandatory)][object]$Slice,        # Select-GovernanceSubtree output
         [Parameter(Mandatory)][string]$Program,
         [Parameter(Mandatory)][string]$TargetOrgUrl,
-        [Parameter(Mandatory)][string]$TargetProject
+        [Parameter(Mandatory)][string]$TargetProject,
+        [object]$Scope = $null    # the migration query: @{ query; label } (ADR-010)
     )
 
     $srcOrgUrl   = ConvertTo-AdoOrgUrl -Org ([string]$Source.org)
@@ -51,7 +52,8 @@ function Get-GovernancePreflightData {
         if (-not $srcAreas.ContainsKey($srcAreaRoot)) {
             throw "source area path '$srcAreaRoot' does not exist in $($Source.org)/$srcProject"
         }
-        $usage = Get-AdoWorkItemUsageUnderArea -OrgUrl $srcOrgUrl -Project $srcProject -AreaPath ([string]$Source.areaPath)
+        $usage = Get-AdoWorkItemUsageUnderArea -OrgUrl $srcOrgUrl -Project $srcProject `
+            -AreaPath ([string]$Source.areaPath) -Filter ([string]$Scope.query)
 
         $repos = $null
         if ($null -ne $repoInclude) {
@@ -128,6 +130,12 @@ function Get-GovernancePreflightData {
             teams       = @($srcTeams)
             repoInclude = $repoInclude
         }
+        # The scope is recorded with the facts it produced: a data file gathered
+        # under a different migration query is a different population, and
+        # -SkipFresh compares this to decide whether reuse is honest.
+        scope      = if ($Scope -and $Scope.query) {
+            [ordered]@{ query = [string]$Scope.query; label = [string]$Scope.label }
+        } else { $null }
         workItems  = [ordered]@{ count = [int]$usage.WorkItemCount }
         areas      = @($areas)
         tags       = $tags
