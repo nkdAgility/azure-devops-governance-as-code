@@ -472,6 +472,35 @@ A node's global key is the product-qualified chain of `short` codes — Portal's
 Graphics Pipeline is `PTL-GPI`. That key names its groups (`PTL-GPI-Contributors`)
 and its membership file (`members/PTL-GPI.yaml`).
 
+### A team directly on a section
+
+A section normally groups its `items` without creating a team of its own.
+When the section itself is accountable, give it an explicit `type` and `short`:
+
+```yaml
+sections:
+  - name: Engineering
+    type: delivery
+    short: ENG
+    pipelineFolder: true
+    repos:
+      - Tools
+```
+
+Under Portal (`short: PTL`), this creates one `Portal\Engineering` area and
+one `PTL-ENG` team, owning `PTL-ENG-Tools`. Its membership still comes from
+`members/PTL-ENG.yaml`; its area authority and pipeline folder use the single
+area. No repeated child is needed. `type` accepts `delivery`, `structural`
+or `portfolio`, with the same planning defaults as other typed nodes.
+Optional section children use `items`, not `teams`; their codes extend the
+section code. Sections without `type` keep their existing grouping behaviour.
+
+When flattening an existing nested team, retain its short code, repositories,
+membership file and team-ID mapping. The area and pipeline-folder paths change,
+so review the desired-state difference before any later live application.
+Building and validating this configuration are offline operations; they do not
+move or rename live resources.
+
 **`members/<code>.yaml`** — desired membership, reconciled in both directions.
 Every entry carries a `reason`, so an access grant is self-documenting:
 

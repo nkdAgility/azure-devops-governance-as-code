@@ -19,6 +19,11 @@ previously left alone, without a line of consumer code changing.
 
 ### Added
 
+- Explicitly typed hierarchy sections can own a team, repositories and a
+  pipeline folder directly on the section area, avoiding a duplicate nested
+  node. Existing untyped sections retain their grouping behaviour. Section
+  children continue to use `items` and extend the owning section's team code.
+
 - `preflight` — per incoming team, a read-only "what would fail if this team
   moved in today?" report against its pre-migration location, declared in a
   new authored seed file `programs/<name>/sources.yaml` (source org / project

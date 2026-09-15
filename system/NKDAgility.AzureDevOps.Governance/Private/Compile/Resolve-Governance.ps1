@@ -483,6 +483,20 @@ function Resolve-Governance {
             if (-not $structuralName) {
                 throw "hierarchy.yaml: product '$($product.name)' has a section without a name."
             }
+            # An explicitly typed section owns its team at this level. Reuse
+            # normal node resolution so codes, repos and permissions stay tied
+            # to that team without manufacturing a second area path.
+            if ($section.type) {
+                if ($section.teams) {
+                    throw "hierarchy.yaml: section '$structuralName' uses teams:; use items: for section children."
+                }
+                $sectionNode = @{}
+                foreach ($key in $section.Keys) { $sectionNode[$key] = $section[$key] }
+                $sectionNode.teams = @($section.items | Where-Object { $null -ne $_ })
+                Add-TeamNode -Node $sectionNode -ParentPath $productPath -ParentTeamName $product.name `
+                    -QualifiedParentName $product.name -ParentCodePath $product.short -IsFirstLevel $true -ProgramRoot $root -Ctx $ctx
+                continue
+            }
             $structuralPath = "$productPath\$structuralName"
             $ctx.AreaPaths.Add([ordered]@{ path = $structuralPath; kind = 'structural' })
 

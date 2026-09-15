@@ -15,6 +15,62 @@ BeforeAll {
 
 Describe 'Compile stage' {
 
+    It 'keeps an explicitly typed section team, repo and authority on one area path' {
+        InModuleScope NKDAgility.AzureDevOps.Governance {
+            $section = @{ name = 'Engineering'; type = 'delivery'; short = 'ENG'; pipelineFolder = $true; repos = @('Tools') }
+            $result = Resolve-Governance -Manifest @{ program = 'Demo'; org = 'demo-org' } `
+                -Source @{ products = @(@{ name = 'Portal'; short = 'PRT'; sections = @($section) }) } `
+                -Access @{ teamGroups = @(@{ role = 'contributor'; ado = '{key}-Contributors' }); containerGroups = @(); roles = @{};
+                           stakeholders = @{ accessLevel = 'stakeholder'; ado = 'Demo-Stakeholders'; scope = 'org' } } `
+                -Members @{ Demo = @{}; PRT = @{}; 'PRT-ENG' = @{ contributor = @(@{ upn = 'engineer@example.com'; reason = 'Delivery' }) } } `
+                -SourceHash 'testhash'
+            $team = @($result.teams | Where-Object codePath -eq 'PRT-ENG')
+            $team.Count | Should -Be 1
+            $team[0].defaultAreaPath | Should -Be '\Demo\Portal\Engineering'
+            $team[0].pipelineFolder | Should -Be '\Portal\Engineering'
+            @($result.areaPaths | Where-Object path -like '*Engineering*').Count | Should -Be 1
+            $repo = $result.repos | Where-Object name -eq 'PRT-ENG-Tools'
+            $repo.owner | Should -Be 'PRT-ENG'
+            $repo.areaPath | Should -Be '\Demo\Portal\Engineering'
+            $team[0].authorityPaths | Should -Be @('\Demo\Portal\Engineering')
+            $team[0].securityGroups[0].ado | Should -Be 'PRT-ENG-Contributors'
+            $team[0].securityGroups[0].members[0].upn | Should -Be 'engineer@example.com'
+            ($repo.acl | Where-Object permission -eq 'write').principal | Should -Be 'PRT-ENG-Contributors'
+        }
+    }
+
+    It 'resolves typed section children once and keeps plain sections teamless' {
+        InModuleScope NKDAgility.AzureDevOps.Governance {
+            $result = Resolve-Governance -Manifest @{ program = 'Demo'; org = 'demo-org' } `
+                -Source @{ products = @(@{ name = 'Portal'; short = 'PRT'; sections = @(
+                    @{ name = 'Engineering'; type = 'structural'; short = 'ENG'; items = @(@{ name = 'Tools'; short = 'TLS' }) },
+                    @{ name = 'Grouping'; items = @(@{ name = 'Other'; short = 'OTH' }) }
+                ) }) } `
+                -Access @{ teamGroups = @(); containerGroups = @(); roles = @{};
+                           stakeholders = @{ accessLevel = 'stakeholder'; ado = 'Demo-Stakeholders'; scope = 'org' } } `
+                -SourceHash 'testhash'
+            @($result.teams | Where-Object codePath -eq 'PRT-ENG-TLS').Count | Should -Be 1
+            ($result.teams | Where-Object codePath -eq 'PRT-ENG-TLS').defaultAreaPath | Should -Be '\Demo\Portal\Engineering\Tools'
+            @($result.teams | Where-Object defaultAreaPath -eq '\Demo\Portal\Grouping').Count | Should -Be 0
+            @($result.areaPaths | Where-Object path -eq '\Demo\Portal\Grouping').Count | Should -Be 1
+        }
+    }
+
+    It 'rejects invalid typed section declarations' -TestCases @(
+        @{ Section = @{ name = 'Engineering'; type = 'unknown'; short = 'ENG' }; Message = '*unknown type*' },
+        @{ Section = @{ name = 'Engineering'; type = 'delivery'; short = 'ENG'; teams = @(@{ name = 'Tools'; short = 'TLS' }) }; Message = '*use items:*' }
+    ) {
+        param($Section, $Message)
+        InModuleScope NKDAgility.AzureDevOps.Governance -Parameters @{ Section = $Section; Message = $Message } {
+            param($Section, $Message)
+            { Resolve-Governance -Manifest @{ program = 'Demo'; org = 'demo-org' } `
+                -Source @{ products = @(@{ name = 'Portal'; short = 'PRT'; sections = @($Section) }) } `
+                -Access @{ teamGroups = @(); containerGroups = @(); roles = @{};
+                           stakeholders = @{ accessLevel = 'stakeholder'; ado = 'Demo-Stakeholders'; scope = 'org' } } `
+                -SourceHash 'testhash' } | Should -Throw $Message
+        }
+    }
+
     It 'writes the resolved file' {
         $script:outputPath | Should -Exist
     }
