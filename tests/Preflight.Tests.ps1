@@ -594,35 +594,47 @@ Describe 'sources.yaml scope (the migration query)' {
 Describe 'Get-GovernancePreflightPaths' {
 
     It 'puts every artefact in preflight\<CODE>\ with a self-describing name' {
-        InModuleScope NKDAgility.AzureDevOps.Governance {
-            $p = Get-GovernancePreflightPaths -ResolvedPath 'C:\out\subsurface\resolved.yaml' -Code 'PTL-FND'
-            $p.Root         | Should -Be 'C:\out\subsurface\preflight'
-            $p.Dir          | Should -Be 'C:\out\subsurface\preflight\PTL-FND'
-            $p.Summary      | Should -Be 'C:\out\subsurface\preflight\subsurface-preflight-summary.md'
-            $p.Data         | Should -Be 'C:\out\subsurface\preflight\PTL-FND\subsurface-preflight-PTL-FND-data.json'
-            $p.Findings     | Should -Be 'C:\out\subsurface\preflight\PTL-FND\subsurface-preflight-PTL-FND-findings.txt'
-            $p.FindingsJson | Should -Be 'C:\out\subsurface\preflight\PTL-FND\subsurface-preflight-PTL-FND-findings.json'
-            $p.Observations | Should -Be 'C:\out\subsurface\preflight\PTL-FND\subsurface-preflight-PTL-FND-observations.md'
-            $p.Report       | Should -Be 'C:\out\subsurface\preflight\PTL-FND\subsurface-preflight-PTL-FND-report.md'
+        InModuleScope NKDAgility.AzureDevOps.Governance -Parameters @{ testRoot = $TestDrive } {
+            param($testRoot)
+            $output = Join-Path $testRoot 'subsurface'
+            $root = Join-Path $output 'preflight'
+            $node = Join-Path $root 'PTL-FND'
+            $p = Get-GovernancePreflightPaths -ResolvedPath (Join-Path $output 'resolved.yaml') -Code 'PTL-FND'
+            $p.Root         | Should -Be $root
+            $p.Dir          | Should -Be $node
+            $p.Summary      | Should -Be (Join-Path $root 'subsurface-preflight-summary.md')
+            $p.Data         | Should -Be (Join-Path $node 'subsurface-preflight-PTL-FND-data.json')
+            $p.Findings     | Should -Be (Join-Path $node 'subsurface-preflight-PTL-FND-findings.txt')
+            $p.FindingsJson | Should -Be (Join-Path $node 'subsurface-preflight-PTL-FND-findings.json')
+            $p.Observations | Should -Be (Join-Path $node 'subsurface-preflight-PTL-FND-observations.md')
+            $p.Report       | Should -Be (Join-Path $node 'subsurface-preflight-PTL-FND-report.md')
         }
     }
 
     It 'takes an explicit program name over the output folder name' {
-        InModuleScope NKDAgility.AzureDevOps.Governance {
-            (Get-GovernancePreflightPaths -ResolvedPath 'C:\out\anything\resolved.yaml' -Code 'X' -Program 'odyssey').Data |
-                Should -Be 'C:\out\anything\preflight\X\odyssey-preflight-X-data.json'
+        InModuleScope NKDAgility.AzureDevOps.Governance -Parameters @{ testRoot = $TestDrive } {
+            param($testRoot)
+            $output = Join-Path $testRoot 'anything'
+            (Get-GovernancePreflightPaths -ResolvedPath (Join-Path $output 'resolved.yaml') -Code 'X' -Program 'odyssey').Data |
+                Should -Be (Join-Path $output 'preflight/X/odyssey-preflight-X-data.json')
         }
     }
 
     It 'keeps the findings text and JSON twin on the same base name' {
-        InModuleScope NKDAgility.AzureDevOps.Governance {
-            $p = Get-GovernancePreflightPaths -ResolvedPath 'C:\out\p\resolved.yaml' -Code 'C'
+        InModuleScope NKDAgility.AzureDevOps.Governance -Parameters @{ testRoot = $TestDrive } {
+            param($testRoot)
+            $p = Get-GovernancePreflightPaths -ResolvedPath (Join-Path $testRoot 'p/resolved.yaml') -Code 'C'
             [System.IO.Path]::ChangeExtension($p.Findings, 'json') | Should -Be $p.FindingsJson
         }
     }
 }
 
 Describe 'Invoke-GovernancePreflight -SkipFresh' {
+
+    BeforeEach {
+        Mock Initialize-AdoAuth {} -ModuleName NKDAgility.AzureDevOps.Governance
+        Mock Get-GovernancePreflightData { throw 'Simulated gather failure' } -ModuleName NKDAgility.AzureDevOps.Governance
+    }
 
     It 'reuses an existing data file and writes the report without contacting any organisation' {
         $dir = Join-Path ([System.IO.Path]::GetTempPath()) "gov-skipfresh-$([guid]::NewGuid())"
@@ -639,11 +651,12 @@ Describe 'Invoke-GovernancePreflight -SkipFresh' {
             $scoped['scope'] = [ordered]@{ query = "[System.IterationPath] NOT UNDER 'LegacyPortal\ARCHIVE'"; label = 'the current release line' }
             $scoped | ConvertTo-Json -Depth 20 | Set-Content $dataPath -Encoding utf8
             $stamp = (Get-Item $dataPath).LastWriteTimeUtc
-            # No az session or PAT is arranged for this test: if the gather were
-            # attempted, Initialize-AdoAuth would be the thing that fails.
+            # Reusing matching data must bypass authentication and gathering.
             Invoke-GovernancePreflight -ProgramPath $script:programPath -ResolvedPath (Join-Path $dir 'resolved.yaml') `
                 -Code PTL-FND -SkipFresh -ErrorAction SilentlyContinue 6>$null 2>$null
             (Get-Item $dataPath).LastWriteTimeUtc | Should -Be $stamp
+            Should -Invoke Initialize-AdoAuth -ModuleName NKDAgility.AzureDevOps.Governance -Times 0 -Exactly
+            Should -Invoke Get-GovernancePreflightData -ModuleName NKDAgility.AzureDevOps.Governance -Times 0 -Exactly
             $json = Get-Content (Join-Path $node 'odyssey-preflight-PTL-FND-findings.json') -Raw | ConvertFrom-Json
             $json.findingCount | Should -BeGreaterThan 0
             @($json.findings | Where-Object check -eq 'preflight.error').Count | Should -Be 0
@@ -661,12 +674,16 @@ Describe 'Invoke-GovernancePreflight -SkipFresh' {
             $stale | ConvertTo-Json -Depth 20 | Set-Content $dataPath -Encoding utf8
 
             # Recent, but gathered under a query the program no longer declares:
-            # -SkipFresh must re-gather, which here fails for want of a credential
-            # rather than silently reporting on the wrong population.
+            # -SkipFresh must re-gather. Simulate a gather failure without live calls.
             Invoke-GovernancePreflight -ProgramPath $script:programPath -ResolvedPath (Join-Path $dir 'resolved.yaml') `
                 -Code PTL-FND -SkipFresh -ErrorAction SilentlyContinue 6>$null 2>$null
             $json = Get-Content (Join-Path $dir 'preflight\PTL-FND\odyssey-preflight-PTL-FND-findings.json') -Raw | ConvertFrom-Json
             @($json.findings | Where-Object check -eq 'preflight.error').Count | Should -Be 1
+            $json.findings[0].message | Should -Match 'Simulated gather failure'
+            Should -Invoke Initialize-AdoAuth -ModuleName NKDAgility.AzureDevOps.Governance -Times 1 -Exactly
+            Should -Invoke Get-GovernancePreflightData -ModuleName NKDAgility.AzureDevOps.Governance -Times 1 -Exactly -ParameterFilter {
+                $Code -eq 'PTL-FND' -and $Scope.query -eq "[System.IterationPath] NOT UNDER 'LegacyPortal\ARCHIVE'"
+            }
             # and the stale data file is left exactly as it was
             (Get-Content $dataPath -Raw | ConvertFrom-Json).scope.label | Should -Be 'something else'
         } finally { Remove-Item $dir -Recurse -Force -ErrorAction SilentlyContinue }

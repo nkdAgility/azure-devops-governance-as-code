@@ -134,11 +134,7 @@ jobs:
   BuildAndPackage:
     name: "Build & Package"
     needs: Prepare
-    runs-on: ${{ matrix.os }}
-    strategy:
-      fail-fast: false
-      matrix:
-        os: [ubuntu-latest, windows-latest]
+    runs-on: ubuntu-latest
     steps:
       - name: Checkout
         uses: actions/checkout@v5
@@ -147,10 +143,8 @@ jobs:
         shell: pwsh
         run: |
           $ErrorActionPreference = 'Stop'
-          # Windows images ship Pester 3.4 in-box; -SkipPublisherCheck is required
-          # to install the 5.x line alongside it.
           if (-not (Get-Module -ListAvailable Pester | Where-Object { $_.Version.Major -ge 5 })) {
-              Install-Module Pester -MinimumVersion 5.0.0 -Scope CurrentUser -Force -SkipPublisherCheck
+              Install-Module Pester -MinimumVersion 5.0.0 -Scope CurrentUser -Force
           }
           if (-not (Get-Module -ListAvailable powershell-yaml)) {
               Install-Module powershell-yaml -Scope CurrentUser -Force
@@ -174,14 +168,11 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: pester-results-${{ matrix.os }}
+          name: pester-results
           path: TestResults/pester.xml
           if-no-files-found: warn
 
-      # Packaging happens once. The module is cross-platform, so the platform
-      # that produces the package is arbitrary; both still run the full suite.
       - name: Stamp the version and package
-        if: matrix.os == 'ubuntu-latest'
         shell: pwsh
         run: |
           $ErrorActionPreference = 'Stop'
@@ -205,7 +196,6 @@ jobs:
                            -DestinationPath "./artifacts/$moduleName.${{ needs.Prepare.outputs.nkdAgility_FullVersion }}.zip"
 
       - name: Upload package
-        if: matrix.os == 'ubuntu-latest'
         uses: actions/upload-artifact@v4
         with:
           name: module-package
