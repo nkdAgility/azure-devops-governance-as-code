@@ -1,7 +1,15 @@
 # Preflight report orchestration — one operator command, many teams
 
 Date: 2026-09-04
-Status: **proposed** — not implemented. Supersedes nothing; builds on ADR-008.
+Status: **implemented** — see ADR-009, and ADR-010/011 for what followed.
+Deviations from this plan, all from running it for real:
+the skill shipped as `preflight-observations`, not `preflight-report`, because
+the latter collided with the `preflight-report` verb and read as "run the
+report"; the workflow gathers **fresh** by default with `resume: true` as the
+opt-in, where this plan had `-SkipFresh` always on; and the renderer withholds
+an observations fragment older than the findings it comments on, which this
+plan did not anticipate and which had already produced one self-contradicting
+report.
 Origin: a live migration engagement. Its first preflight produced a data file
 and a findings file deterministically, and then a customer-facing markdown
 document that was written by hand in a chat session with no saved prompt. That

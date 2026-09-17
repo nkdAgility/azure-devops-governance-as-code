@@ -30,15 +30,16 @@ function Test-GovernanceSources {
         Keys must be known check ids ($script:GovernancePreflightChecks);
         values must be flat maps of scalars.
 
-        Optional top-level `scope:` (ADR-010) is the migration query: the WIQL
-        boolean fragment naming which work items are actually moving, so
+        Optional top-level `scope:` (ADR-010) is the migration query: complete
+        flat WIQL naming which work items are actually moving, so
         validation is not run across archive nobody will migrate. A node may
         override it with its own `scope:`.
 
           scope:
             label: "2026.1 and onwards"          # what to call it in the report
-            query: >-                            # a FRAGMENT, not a whole query
-              [System.IterationPath] NOT UNDER 'Proj\ARCHIVE'
+            query: >-
+              SELECT [System.Id] FROM WorkItems WHERE [System.TeamProject] = 'Proj'
+              AND [System.IterationPath] NOT UNDER 'Proj\ARCHIVE'
 
         Optional top-level `reporting:` (ADR-009) frames the rendered markdown
         fix report — all fields optional:
@@ -62,21 +63,22 @@ function Test-GovernanceSources {
 
     $issues = @()
 
-    # scope: the migration query (ADR-010). A WIQL boolean FRAGMENT, never a
-    # whole query — the engine owns the project, area and paging predicates.
+    # scope: the migration query (ADR-010). The query owns project and area
+    # selection; the engine adds ID paging when it runs the query.
     $testScope = {
         param($s, $at)
         $found = @()
-        if ($s -isnot [System.Collections.IDictionary]) { return @("$at must be a map with a 'query' (a WIQL boolean fragment)") }
+        if ($s -isnot [System.Collections.IDictionary]) { return @("$at must be a map with a 'query' (a flat WIQL query)") }
         foreach ($k in @($s.Keys)) {
             if ($k -notin 'query', 'label') { $found += "$at '$k' is not a scope field. Known: query, label" }
         }
         $q = [string]$s['query']
         if ([string]::IsNullOrWhiteSpace($q)) {
-            $found += "$at is missing 'query' - a WIQL boolean fragment, for example: [System.IterationPath] NOT UNDER 'Proj\ARCHIVE'"
+            $found += "$at is missing 'query' - a flat WIQL SELECT [System.Id] FROM WorkItems WHERE query"
         }
-        elseif ($q -match '(?i)\bSELECT\b|\bFROM\s+WorkItem|\bORDER\s+BY\b|;') {
-            $found += "$at query must be a boolean FRAGMENT only - no SELECT, FROM, ORDER BY or ';'. The engine supplies the project, area-path and paging clauses and ANDs your fragment into them."
+        else {
+            try { $null = Get-AdoWiqlWhereClause -Query $q }
+            catch { $found += "$at $($_.Exception.Message)" }
         }
         if ($s.Contains('label') -and $s['label'] -isnot [string]) { $found += "$at label must be a string" }
         return $found

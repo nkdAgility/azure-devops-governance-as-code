@@ -3,6 +3,7 @@
 # Test-GovernanceSources validates against this list.
 $script:GovernancePreflightChecks = @(
     'area.orphan',            # source sub-area with no authored counterpart
+    'area.unmapped',          # selected work items outside the source projection root
     'tag.disallowed',         # a disallowed pattern family in use on source work items
     'tag.boardColumn',        # a tag that names a process stage: becomes a board column
     'tag.retire',             # a tag declared for removal, no replacement
@@ -62,6 +63,7 @@ function Resolve-GovernancePreflightFindings {
 
     $nodeCode   = [string]$Data.node
     $srcArea    = ([string]$Data.source.areaPath).TrimStart('\')
+    $populationDescription = if ($Data.scope -and $Data.scope.query) { 'in the migration query' } else { "under $srcArea" }
     $tagUsage   = $Data.tags
     $tagCount   = { param($t) [int]$tagUsage[$t] }
 
@@ -91,12 +93,23 @@ function Resolve-GovernancePreflightFindings {
         })
         & $say 'orphan' "area path: $orphan  (today: $($sourceOf[$orphan]), $($usageOf[$orphan]) work item(s))"
     }
+    foreach ($outside in @($Data.unmappedAreas | Where-Object { $_ })) {
+        & $add ([ordered]@{
+            class     = 'exception'
+            check     = 'area.unmapped'
+            subject   = [string]$outside.source
+            source    = [string]$outside.source
+            workItems = [int]$outside.workItems
+            message   = "AUDIT EXCEPTION source area: $($outside.source) has $($outside.workItems) selected work item(s) outside the configured source root; define their target placement before migration"
+        })
+        & $say 'orphan' "selected work items outside source root: $($outside.source) ($($outside.workItems))"
+    }
     foreach ($m in $areaVerdict.Missing) {
         $info.Add("authored area path with no source counterpart (apply creates it; decide where its work items come from): $m")
         & $say 'info' "no source counterpart: $m"
     }
 
-    # ── 2. Tags in use on work items under the source area ────────────────────
+    # ── 2. Tags in use on selected work items ────────────────────────────────
     if ($Slice.Tags) {
         & $say 'section' 'Tags'
         $tagVerdict = Test-GovernanceTagCompliance -Sanctioned @($Slice.Tags.sanctioned) `
@@ -118,7 +131,7 @@ function Resolve-GovernancePreflightFindings {
                 tags      = $names.Count
                 workItems = [int]$onItems
                 examples  = $examples
-                message   = "DRIFT tag pattern '$($entry.Key)': $($names.Count) tag(s) on $onItems work item(s) under $srcArea match a disallowed pattern — e.g. $($examples -join ', ')"
+                message   = "DRIFT tag pattern '$($entry.Key)': $($names.Count) tag(s) on $onItems work item(s) $populationDescription match a disallowed pattern — e.g. $($examples -join ', ')"
             })
             & $say 'drift' "tag pattern '$($entry.Key)': $($names.Count) tag(s), $onItems work item(s) — e.g. $($examples -join ', ')"
         }
@@ -131,7 +144,7 @@ function Resolve-GovernancePreflightFindings {
                 check     = 'tag.boardColumn'
                 subject   = $t
                 workItems = $n
-                message   = "DRIFT tag '$t': names a process stage, so it belongs as a board column rather than a tag (in use on $n work item(s) under $srcArea)"
+                message   = "DRIFT tag '$t': names a process stage, so it belongs as a board column rather than a tag (in use on $n work item(s) $populationDescription)"
             })
             & $say 'drift' "tag -> board column: $t ($n work item(s))"
         }
@@ -142,7 +155,7 @@ function Resolve-GovernancePreflightFindings {
                 check     = 'tag.retire'
                 subject   = $t
                 workItems = $n
-                message   = "DRIFT tag '$t': declared for retirement, remove it with no replacement (in use on $n work item(s) under $srcArea)"
+                message   = "DRIFT tag '$t': declared for retirement, remove it with no replacement (in use on $n work item(s) $populationDescription)"
             })
             & $say 'drift' "tag -> retire: $t ($n work item(s))"
         }
@@ -153,7 +166,7 @@ function Resolve-GovernancePreflightFindings {
                 check     = 'tag.unsanctioned'
                 subject   = $t
                 workItems = $n
-                message   = "AUDIT EXCEPTION tag: $t (in use on $n work item(s) under $srcArea — no destination decided: sanction it, make it a board column, or retire it)"
+                message   = "AUDIT EXCEPTION tag: $t (in use on $n work item(s) $populationDescription — no destination decided: sanction it, make it a board column, or retire it)"
             })
             & $say 'orphan' "tag: $t ($n work item(s))"
         }
@@ -259,7 +272,7 @@ function Resolve-GovernancePreflightFindings {
     } else {
         $info.Add('no migration query declared, so every work item under the area was counted, archive included — declare sources.yaml scope: to validate only what is actually moving')
     }
-    $info.Add("$($Data.workItems.count) work item(s) under $srcArea at the source")
+    $info.Add("$($Data.workItems.count) work item(s) $populationDescription at the source")
     $iterations = $Data.iterations
     if ($iterations) {
         foreach ($k in @($iterations.Keys | Sort-Object { [int]$iterations[$_] } -Descending | Select-Object -First 5)) {

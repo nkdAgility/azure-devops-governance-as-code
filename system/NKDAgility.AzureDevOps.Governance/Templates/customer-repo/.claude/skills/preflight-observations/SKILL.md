@@ -1,20 +1,37 @@
 ---
-name: preflight-report
+name: preflight-observations
 description: >
-  Write the Observations fragment for one team's governance preflight fix
-  report, from its data file and findings file, under strict no-invented-
-  numbers rules. WHEN: asked for preflight observations for a team, or
-  invoked by the audit-preflight workflow through the preflight-reporter
-  agent. Never for writing the report itself — the renderer owns that.
+  Write ONE team's Observations fragment for a governance preflight fix report
+  that has ALREADY been gathered and rendered, under strict no-invented-numbers
+  rules. It reads existing files and writes one prose fragment. It does NOT
+  gather from Azure DevOps, does NOT run the analysis, and does NOT render the
+  report — for the whole pipeline use /audit-preflight instead. WHEN: asked for
+  preflight observations for a named team, or invoked by the audit-preflight
+  workflow through the preflight-reporter agent.
 ---
 
 # Preflight observations
 
-## What this is
+## This skill does one thing
 
-The preflight pipeline produces, per team, three machine-written files in
-`<output>\preflight\<CODE>\`, each named
-`<program>-preflight-<CODE>-<part>`:
+It writes the commentary for a team whose report already exists. Read that
+twice: **it does not refresh anything.**
+
+| | |
+|---|---|
+| **Does** | write `-observations.md` for one team |
+| **Does not** | gather from the source organisation, run the analysis, or render the report |
+| **For the whole pipeline** | `/audit-preflight` — gather, analyse, render, observe, check, publish |
+| **To see the fragment in the report** | `Invoke-Governance preflight-report <program>` afterwards |
+
+If the data is stale, this skill will happily comment on stale data. It has no
+way to tell and no way to fix it. When in doubt, run `/audit-preflight`, which
+gathers fresh every time.
+
+## What you are writing into
+
+The pipeline produces, per team, three machine-written files in
+`<output>\preflight\<CODE>\`, each named `<program>-preflight-<CODE>-<part>`:
 
 | File part | Written by | Holds |
 | --- | --- | --- |
@@ -26,6 +43,11 @@ The report already says **what** was found. Your job is the one section it
 cannot write: what the shape **means**. You write that to a fourth file,
 `-observations.md` in the same folder, and the renderer splices it in on its
 next pass.
+
+**Your fragment is withheld if it is older than the findings.** The renderer
+compares modification times and refuses to splice commentary written against a
+superseded analysis, because that is how a report ends up contradicting its own
+tables. So write against the findings that are there now, and re-render after.
 
 ## Contract
 
@@ -64,15 +86,15 @@ next pass.
    does not control cannot be retired by the team, so it has to be sanctioned
    or it becomes a permanent exception; and never propose a destination for a
    tag the report already shows as decided.
-4. **Use the labels, not your own scheme.** If findings carry `rule`, `task`
+5. **Use the labels, not your own scheme.** If findings carry `rule`, `task`
    or `lane`, refer to those exactly. If they carry none, name the check id.
    Never invent a rule number or a document name.
-5. **Propose, never decide.** A destination you suggest is a proposal for the
+6. **Propose, never decide.** A destination you suggest is a proposal for the
    team to accept or reject; it is not settled until it is in the program
    config. Do not invent tag names, decide a fold, or assign who does the work.
-6. **No people by name.** UPNs appear in the findings for a reason; they do
+7. **No people by name.** UPNs appear in the findings for a reason; they do
    not appear in a document that gets forwarded.
-7. **If the findings contain a `preflight.error`, write one bullet saying the
+8. **If the findings contain a `preflight.error`, write one bullet saying the
    gather failed and why, and stop.** Do not interpret partial data.
 
 ## What good looks like

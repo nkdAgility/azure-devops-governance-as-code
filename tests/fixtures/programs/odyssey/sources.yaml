@@ -18,11 +18,13 @@ sources:
     accessToken: $Env:AZDEVOPS_LEGACY_PAT
 
 # The migration query (ADR-010): which work items are actually moving, so
-# validation is not run across archive nobody will migrate. A WIQL boolean
-# FRAGMENT - the engine supplies project, area path and paging.
+# validation is not run across archive nobody will migrate. A complete flat
+# WIQL query owns source area selection; the engine adds ID paging.
 scope:
   label: "the current release line"
-  query: "[System.IterationPath] NOT UNDER 'LegacyPortal\\ARCHIVE'"
+  query: >-
+    SELECT [System.Id] FROM WorkItems WHERE [System.TeamProject] = 'LegacyPortal'
+    AND [System.IterationPath] NOT UNDER 'LegacyPortal\ARCHIVE'
 
 # Engagement vocabulary attached to findings per check id (ADR-008): here a
 # made-up team-facing standard with lettered rules and owner lanes.

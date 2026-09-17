@@ -97,6 +97,7 @@ function ConvertTo-GovernancePreflightReport {
 
     # ── facts ─────────────────────────────────────────────────────────────
     $areas      = @($data.areas)
+    $unmappedAreas = @($data.unmappedAreas | Where-Object { $_ })
     $srcRoot    = [string]$data.source.areaPath
     $subAreas   = @($areas | Where-Object { [string]$_.source -ne $srcRoot })
     $orphanSet  = @{}; foreach ($f in @(if ($byCheck.ContainsKey('area.orphan')) { $byCheck['area.orphan'] })) { $orphanSet[[string]$f.source] = $true }
@@ -155,6 +156,7 @@ function ConvertTo-GovernancePreflightReport {
     $L.Add('## Summary'); $L.Add('')
     $catalogue = @(
         @{ check = 'area.orphan';            label = 'Area paths not authored in the target';      result = { "$(& $n (& $count 'area.orphan')) of $(& $n $subAreas.Count) sub-areas" } },
+        @{ check = 'area.unmapped';          label = 'Selected source areas without target placement'; result = { "$(& $n $unmappedAreas.Count) area(s)" } },
         @{ check = 'tag.disallowed';         label = 'Tags: machine-generated families';           result = { if ($families.Count) { "$($families.Count) families, $(& $n $famTags) tags on $(& $n $famItems) work items" } else { 'none' } } },
         @{ check = 'tag.boardColumn';        label = 'Tags that become board columns';             result = { if ($asColumn.Count) { "$(& $n $asColumn.Count) tags" } else { 'none declared' } } },
         @{ check = 'tag.retire';             label = 'Tags to retire outright';                    result = { if ($toRetire.Count) { "$(& $n $toRetire.Count) tags" } else { 'none declared' } } },
@@ -183,6 +185,9 @@ function ConvertTo-GovernancePreflightReport {
                else                              { "authored as ``$([string]$a.target)``" }
         , @((& $n $a.workItems), "``$src``", $st)
     }
+    $areaRows += @(foreach ($a in ($unmappedAreas | Sort-Object { -[long]$_.workItems }, { [string]$_.source })) {
+        , @((& $n $a.workItems), "``$($a.source)``", 'outside source root — target placement required')
+    })
     & $table @('Work items', 'Area path today', 'In the target') @($areaRows)
 
     # 2. Tags
@@ -261,9 +266,21 @@ function ConvertTo-GovernancePreflightReport {
     # 6. Observations (the only section anyone other than this function writes)
     $L.Add('## 6. Observations'); $L.Add('')
     $L.Add('<!-- observations:begin -->')
+    # Observations comment on a specific analysis. If the findings have been
+    # regenerated since the fragment was written, the commentary may contradict
+    # the tables above it - which is exactly how a report ends up arguing with
+    # itself - so it is WITHHELD rather than spliced. Modification time is the
+    # test on purpose: a confused writer cannot forge it the way it could forge
+    # a stamp inside the file.
+    $obsStale = $false
     if ($ObservationsPath -and (Test-Path -LiteralPath $ObservationsPath)) {
+        $obsStale = (Get-Item -LiteralPath $ObservationsPath).LastWriteTimeUtc -lt (Get-Item -LiteralPath $FindingsPath).LastWriteTimeUtc
+    }
+    if ($ObservationsPath -and (Test-Path -LiteralPath $ObservationsPath) -and -not $obsStale) {
         $frag = (Get-Content -LiteralPath $ObservationsPath -Raw) -replace "`r`n", "`n"
         foreach ($line in ($frag.Trim() -split "`n")) { $L.Add($line) }
+    } elseif ($obsStale) {
+        $L.Add("_Observations withheld: ``$(Split-Path -Leaf $ObservationsPath)`` was written before the current analysis, so it may contradict the tables above. Re-run the observation step, or delete the file._")
     } else {
         $L.Add('_No observations were generated for this report._')
     }

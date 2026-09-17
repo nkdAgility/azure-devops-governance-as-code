@@ -45,10 +45,13 @@ organisation, and reconciled.
   finding per pattern with counts and examples. Non-zero exit on findings, same CI
   contract as audit.
 - **`sources.yaml scope:` is the migration query, and it decides what gets validated.**
-  A WIQL boolean *fragment* (never a whole query — the engine owns the project, area and
-  paging clauses and ANDs yours in parentheses), at program level or per node. Without it
+  A complete flat WIQL `SELECT [System.Id] FROM WorkItems WHERE` query at program
+  level or per node owns the source project and area selection. The engine adds ID
+  paging and replaces ordering to gather every selected item. Without a query,
   preflight counts every work item under the area including archive, and the report says
   so in its header. It is the same text the migration toolchain needs, so author it once.
+  Selected areas outside the configured source projection root are reported as
+  unmapped and require target placement before migration.
   Changing it re-gathers: `-SkipFresh` will not reuse a data file recorded under a
   different query, because that is a different population.
 - **The fix report is rendered, never written.** `preflight-report` turns each team's
@@ -57,8 +60,11 @@ organisation, and reconciled.
   spliced in between markers on the next render. **Never edit the report by hand and
   never retype a number from it** — change the fragment or the inputs and re-render. The shipped `/audit-preflight` command runs the whole
   pipeline for every team (cheap agents shell out for gather/render/publish; one agent
-  per team writes the fragment under `.claude/skills/preflight-report/SKILL.md`; a
-  checker verifies its numbers). Subagents spawned by it have a shell for the read-only
+  per team writes the fragment under `.claude/skills/preflight-observations/SKILL.md`;
+  a checker verifies its numbers). **`/audit-preflight` gathers fresh every time** —
+  `resume: true` is the opt-in for continuing a run cut short by an expired sign-in.
+  A `-observations.md` older than the findings it comments on is **withheld** from the
+  render, not spliced, so a report never argues with its own tables. Subagents spawned by it have a shell for the read-only
   verbs only: `.claude/hooks/deny-governance-apply.ps1` refuses any shell command that
   would run `apply` (except `-WhatIf`) — register it in `.claude/settings.json` under
   `PreToolUse` with matcher `PowerShell|Bash` if this workspace has not already.

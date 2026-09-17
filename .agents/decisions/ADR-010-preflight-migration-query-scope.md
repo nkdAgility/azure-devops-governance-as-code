@@ -68,3 +68,17 @@ form is a query; it simply had nowhere to live where governance could see it.
   which is the number a fold decision should be based on.
 - Changing the query invalidates every gathered data file, by design. The
   re-gather is a live call against the source organisation.
+
+## Amendment — 2026-09-17: complete query owns source areas
+
+The fragment restriction in Decision 2 is superseded. A migration scope is a
+committed flat `SELECT [System.Id] FROM WorkItems WHERE ...` WIQL query. The
+query owns project and source area selection, so it can name multiple areas.
+The engine retains complete ID paging by adding a `System.Id` cursor predicate
+and ordering each page by ID; authored ordering is replaced during gather.
+
+The configured `areaPath` remains the root for projecting source structure
+into the target hierarchy. Selected work items outside that root are included
+in tag, iteration and work-item counts, and their source paths are reported as
+unmapped areas needing explicit target placement before migration. The
+version-controlled query and query-change re-gather rules above still apply.

@@ -1,3 +1,16 @@
+function Get-GovernanceUnmappedSourceAreas {
+    param(
+        [Parameter(Mandatory)][System.Collections.IDictionary]$AreaPaths,
+        [Parameter(Mandatory)][string]$SourceRoot
+    )
+    $rootless = $SourceRoot.TrimStart('\')
+    foreach ($srcPath in @($AreaPaths.Keys | Sort-Object)) {
+        $path = ([string]$srcPath).TrimStart('\')
+        if ($path -eq $rootless -or $path -like "$rootless\*") { continue }
+        [ordered]@{ source = '\' + $path; workItems = [int]$AreaPaths[$srcPath] }
+    }
+}
+
 function Get-GovernancePreflightData {
     <#
         .SYNOPSIS
@@ -53,7 +66,7 @@ function Get-GovernancePreflightData {
             throw "source area path '$srcAreaRoot' does not exist in $($Source.org)/$srcProject"
         }
         $usage = Get-AdoWorkItemUsageUnderArea -OrgUrl $srcOrgUrl -Project $srcProject `
-            -AreaPath ([string]$Source.areaPath) -Filter ([string]$Scope.query)
+            -AreaPath ([string]$Source.areaPath) -Query ([string]$Scope.query)
 
         $repos = $null
         if ($null -ne $repoInclude) {
@@ -77,6 +90,10 @@ function Get-GovernancePreflightData {
             workItems = [int]$usage.AreaPaths[$srcPath.TrimStart('\')]
         }
     }
+    # A full query can select work items outside the source root. Their area
+    # paths cannot be projected by the root-relative mapping, so surface them
+    # explicitly rather than silently omitting them from placement findings.
+    $unmappedAreas = @(Get-GovernanceUnmappedSourceAreas -AreaPaths $usage.AreaPaths -SourceRoot $srcAreaRoot)
 
     # ── Target organisation: can every authored person be granted access? ────
     $upnCache   = @{}   # upn -> @{ resolved; suggestions }
@@ -138,6 +155,7 @@ function Get-GovernancePreflightData {
         } else { $null }
         workItems  = [ordered]@{ count = [int]$usage.WorkItemCount }
         areas      = @($areas)
+        unmappedAreas = @($unmappedAreas)
         tags       = $tags
         iterations = $iterations
         repos      = $repos

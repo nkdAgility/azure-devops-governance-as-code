@@ -1724,6 +1724,47 @@ function Exit-AdoOrgAuth {
     else { Remove-Item Env:AZURE_DEVOPS_EXT_PAT -ErrorAction SilentlyContinue }
 }
 
+function Get-AdoWiqlWhereClause {
+    <# Validate the supported flat work-item query and return its WHERE clause.
+       Preflight replaces the authored ordering with ID ordering for complete paging. #>
+    param([Parameter(Mandatory)][string]$Query)
+    $match = [regex]::Match($Query,
+        '^\s*SELECT\s+\[System\.Id\]\s+FROM\s+WorkItems\s+WHERE\s+(?<tail>.+)$',
+        [System.Text.RegularExpressions.RegexOptions]::IgnoreCase -bor [System.Text.RegularExpressions.RegexOptions]::Singleline)
+    if (-not $match.Success) {
+        throw 'scope.query must be a flat WIQL SELECT [System.Id] FROM WorkItems WHERE query'
+    }
+    $tail = $match.Groups['tail'].Value.Trim()
+    $quote = [char]0
+    $bracket = $false
+    $orderAt = -1
+    for ($i = 0; $i -lt $tail.Length; $i++) {
+        $ch = $tail[$i]
+        if ($quote -ne [char]0) {
+            if ($ch -eq $quote) {
+                if ($i + 1 -lt $tail.Length -and $tail[$i + 1] -eq $quote) { $i++; continue }
+                $quote = [char]0
+            }
+            continue
+        }
+        if ($ch -eq "'" -or $ch -eq '"') { $quote = $ch; continue }
+        if ($ch -eq '[') { $bracket = $true; continue }
+        if ($ch -eq ']') { $bracket = $false; continue }
+        if ($bracket) { continue }
+        if ($ch -eq ';') { throw 'scope.query must not contain a statement separator' }
+        if ($i -gt 0 -and -not [char]::IsWhiteSpace($tail[$i - 1])) { continue }
+        $rest = $tail.Substring($i)
+        if ($rest -match '^(?i)(ASOF|GROUP\s+BY|MODE)\b') {
+            throw 'scope.query must be a flat WIQL query without ASOF, GROUP BY or MODE'
+        }
+        if ($rest -match '^(?i)ORDER\s+BY\b') { $orderAt = $i; break }
+    }
+    if ($quote -ne [char]0 -or $bracket) { throw 'scope.query has an unterminated string or field name' }
+    $where = if ($orderAt -ge 0) { $tail.Substring(0, $orderAt).Trim() } else { $tail }
+    if ([string]::IsNullOrWhiteSpace($where)) { throw 'scope.query must have a WHERE condition' }
+    return $where
+}
+
 function Get-AdoWorkItemUsageUnderArea {
     <#
         .SYNOPSIS
@@ -1735,20 +1776,17 @@ function Get-AdoWorkItemUsageUnderArea {
            WorkItemCount = n }. Read-only; failures throw — a half-counted
         vocabulary must never present as the whole one.
 
-        Filter is an optional WIQL boolean FRAGMENT (not a whole query) ANDed
-        into the WHERE clause, so a programme can narrow the population to the
-        work items actually migrating — a legacy area is mostly archive, and
-        validating tags across work nobody will move produces a fix list no
-        team should be asked to act on. It is wrapped in parentheses: without
-        them an authored 'A OR B' would bind against the area predicate and
-        silently widen the query beyond the subtree.
+        Query is an optional complete flat WIQL query. When present it owns
+        the population, including source area selection. Preflight adds only
+        ID paging and replaces ordering with System.Id ascending. Without a
+        query, the configured source area subtree is the default population.
     #>
     [CmdletBinding()]
     param(
         [Parameter(Mandatory)][string]$OrgUrl,
         [Parameter(Mandatory)][string]$Project,
         [Parameter(Mandatory)][string]$AreaPath,
-        [string]$Filter = ''
+        [string]$Query = ''
     )
     $tags       = @{}
     $iterations = @{}
@@ -1760,19 +1798,32 @@ function Get-AdoWorkItemUsageUnderArea {
     $pageSize   = 19999   # WIQL flat queries cap at 20000 results
     $lastId     = 0
 
-    $scopeClause = if ([string]::IsNullOrWhiteSpace($Filter)) { '' } else { " AND ($Filter)" }
+    $baseWhere = if ([string]::IsNullOrWhiteSpace($Query)) {
+        "[System.TeamProject] = '$escProject' AND [System.AreaPath] UNDER '$escArea'"
+    } else { Get-AdoWiqlWhereClause -Query $Query }
 
     while ($true) {
-        $wiql = "SELECT [System.Id] FROM WorkItems WHERE [System.TeamProject] = '$escProject' AND [System.AreaPath] UNDER '$escArea'$scopeClause AND [System.Id] > $lastId ORDER BY [System.Id] ASC"
+        $wiql = "SELECT [System.Id] FROM WorkItems WHERE ($baseWhere) AND [System.Id] > $lastId ORDER BY [System.Id] ASC"
         $page = Invoke-AdoRest -OrgUrl $OrgUrl -Path "$Project/_apis/wit/wiql?`$top=$pageSize" `
             -Method 'POST' -Body @{ query = $wiql }
         $ids  = @(@($page.workItems) | ForEach-Object { [int]$_.id })
         if ($ids.Count -eq 0) { break }
+        if ($ids.Count -gt $pageSize -or $ids[0] -le $lastId) {
+            throw "WIQL paging returned an invalid ID page after $lastId"
+        }
+        for ($j = 1; $j -lt $ids.Count; $j++) {
+            if ($ids[$j] -le $ids[$j - 1]) { throw "WIQL paging returned IDs out of order or duplicated after $lastId" }
+        }
 
         for ($i = 0; $i -lt $ids.Count; $i += 200) {
             $batchIds = @($ids[$i..([Math]::Min($i + 199, $ids.Count - 1))])
             $batch = Invoke-AdoRest -OrgUrl $OrgUrl -Path "$Project/_apis/wit/workitemsbatch" `
                 -Method 'POST' -Body @{ ids = $batchIds; fields = @('System.Tags', 'System.IterationPath', 'System.AreaPath') }
+            $returnedIds = @(@($batch.value) | ForEach-Object { [int]$_.id } | Sort-Object)
+            $requestedIds = @($batchIds | Sort-Object)
+            if ($returnedIds.Count -ne $requestedIds.Count -or ($returnedIds -join ',') -ne ($requestedIds -join ',')) {
+                throw "ADO workitemsbatch returned a different ID set from the $($batchIds.Count) IDs requested; refusing partial preflight counts"
+            }
             foreach ($wi in @($batch.value)) {
                 $count++
                 $areaField = [string]$wi.fields.'System.AreaPath'
@@ -1789,7 +1840,8 @@ function Get-AdoWorkItemUsageUnderArea {
         }
 
         $lastId = $ids[-1]
-        if ($ids.Count -lt $pageSize) { break }
+        # A short nonempty page does not prove exhaustion: some servers cap
+        # page size below the requested top value. Continue until an empty page.
     }
 
     return @{ Tags = $tags; IterationPaths = $iterations; AreaPaths = $areas; WorkItemCount = $count }

@@ -288,12 +288,17 @@ programme's own decision about what comes across:
 ```yaml
 scope:
   label: "2026.1 and onwards"
-  query: "[System.IterationPath] NOT UNDER 'Proj\\ARCHIVE'"
+  query: >-
+    SELECT [System.Id] FROM WorkItems WHERE [System.TeamProject] = 'Proj'
+    AND [System.IterationPath] NOT UNDER 'Proj\ARCHIVE'
 ```
 
-It is a WIQL boolean **fragment**, not a whole query: the engine supplies the
-project, area-path and paging clauses and ANDs yours into them in parentheses.
-A node may override the programme default with its own `scope:`.
+It is a complete flat WIQL query. The query owns project and source area
+selection, so it may select work from multiple areas. The engine adds ID paging
+and replaces any authored ordering with `System.Id ASC` while gathering. A node
+may override the programme default with its own `scope:`. Selected items outside
+the configured source area root are reported as unmapped until their target
+placement is defined.
 
 This is deliberately the same text your migration toolchain needs for its own
 work-item query, so one authored decision drives both. A saved Azure DevOps
@@ -591,7 +596,7 @@ The reasoning behind the non-obvious choices is recorded in
 | [ADR-007](.agents/decisions/ADR-007-preflight-shared-evaluators.md) | Preflight evaluates projected pre-migration state through the audit's own evaluators |
 | [ADR-008](.agents/decisions/ADR-008-preflight-data-then-analysis.md) | Preflight gathers a facts-only data document first, then analyses it offline |
 | [ADR-009](.agents/decisions/ADR-009-preflight-report-orchestration.md) | The renderer owns the fix report; agents write one observations fragment |
-| [ADR-010](.agents/decisions/ADR-010-preflight-migration-query-scope.md) | The migration query is a committed WIQL fragment, and it scopes preflight |
+| [ADR-010](.agents/decisions/ADR-010-preflight-migration-query-scope.md) | The migration query scopes preflight; the 2026-09-17 amendment accepts a complete WIQL query with multiple source areas |
 | [ADR-011](.agents/decisions/ADR-011-tag-dispositions.md) | A tag that is not sanctioned still needs a destination: board column, retirement, or a decision |
 
 ---

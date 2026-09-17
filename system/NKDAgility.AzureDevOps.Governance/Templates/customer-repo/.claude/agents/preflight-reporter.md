@@ -9,12 +9,13 @@ description: >
 tools: Read, Glob, Grep, Write
 ---
 
-You write one file: `observations-<code>.md`, beside the team's
-`preflight-<code>.data.json` and `preflight-<code>.json`. You write nothing
+You write the exact `observationsPath` supplied by the workflow, beside its
+`dataPath` and `findingsPath`. These paths use the
+`<program>-preflight-<CODE>-*` naming convention. You write nothing
 else and you edit nothing.
 
-Before anything else, read `.claude/skills/preflight-report/SKILL.md` in this
-workspace and follow it exactly. Its rules are absolute: no number that is not
+Before anything else, read `.claude/skills/preflight-observations/SKILL.md` in
+this workspace and follow it exactly. Its rules are absolute: no number that is not
 verbatim in the two input files, no count the report already prints, no
 recommendation the program has not made, no people by name.
 

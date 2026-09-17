@@ -377,6 +377,7 @@ Describe 'Resolve-GovernancePreflightFindings' {
             $byCheck['tag.boardColumn'][0].workItems | Should -Be 7
             $byCheck['tag.boardColumn'][0].class     | Should -Be 'drift'
             $byCheck.Keys | Should -Not -Contain 'tag.unsanctioned'
+            $byCheck.Keys | Should -Not -Contain 'area.unmapped'
             $byCheck['teamAdmin.unresolvable'][0].suggestions | Should -Be @('ghosting@example.com')
             $byCheck['member.unauthored'][0].subject    | Should -Be 'nobody@example.com'
             $byCheck['member.unauthored'][0].sourceTeam | Should -Be 'Foundation Crew'
@@ -402,6 +403,22 @@ Describe 'Resolve-GovernancePreflightFindings' {
         }
     }
 
+    It 'reports selected work outside the source projection root' {
+        InModuleScope NKDAgility.AzureDevOps.Governance -Parameters @{ resolved = $script:resolved; data = $script:fndData } {
+            param($resolved, $data)
+            $withOutside = $data | ConvertTo-Json -Depth 20 | ConvertFrom-Json -AsHashtable -Depth 20
+            $withOutside.scope = @{ query = "SELECT [System.Id] FROM WorkItems WHERE [System.TeamProject] = 'LegacyPortal'"; label = 'migration' }
+            $withOutside.unmappedAreas = @(@{ source = '\LegacyPortal\Platform'; workItems = 2 })
+            $slice = Select-GovernanceSubtree -Resolved $resolved -Code 'PTL-FND'
+            $r = Resolve-GovernancePreflightFindings -Data $withOutside -Slice $slice
+            $outside = @($r.Findings | Where-Object { $_.check -eq 'area.unmapped' })
+            $outside.Count | Should -Be 1
+            $outside[0].subject | Should -Be '\LegacyPortal\Platform'
+            $outside[0].workItems | Should -Be 2
+            $r.Info | Should -Contain '12 work item(s) in the migration query at the source'
+        }
+    }
+
     It 'gives the same verdicts from a document round-tripped through JSON' {
         InModuleScope NKDAgility.AzureDevOps.Governance -Parameters @{ resolved = $script:resolved; data = $script:fndData } {
             param($resolved, $data)
@@ -411,6 +428,17 @@ Describe 'Resolve-GovernancePreflightFindings' {
                 -Data ($data | ConvertTo-Json -Depth 20 | ConvertFrom-Json -AsHashtable -Depth 20)
             @($reloaded.Findings | ForEach-Object { $_.message }) | Should -Be @($fresh.Findings | ForEach-Object { $_.message })
             $reloaded.Info | Should -Be $fresh.Info
+        }
+    }
+}
+
+Describe 'Get-GovernanceUnmappedSourceAreas' {
+    It 'keeps selected sibling and parent areas while excluding the root and descendants' {
+        InModuleScope NKDAgility.AzureDevOps.Governance {
+            $areas = @{ 'P\Foundation' = 2; 'P\Foundation\Inbox' = 3; 'P\Platform' = 4; 'P' = 1 }
+            $outside = @(Get-GovernanceUnmappedSourceAreas -AreaPaths $areas -SourceRoot '\P\Foundation')
+            @($outside | ForEach-Object source) | Should -Be @('\P', '\P\Platform')
+            @($outside | ForEach-Object workItems) | Should -Be @(1, 4)
         }
     }
 }
@@ -467,6 +495,7 @@ Describe 'ConvertTo-GovernancePreflightReport' {
         $md | Should -Match ([regex]::Escape('| 3 | `\LegacyPortal\Foundation\Inbox` | authored as `\Odyssey\Portal\Platform\Foundation\Inbox` |'))
         $md | Should -Match ([regex]::Escape('| 5 | `\LegacyPortal\Foundation` | the team root |'))
         $md | Should -Match '\| Area paths not authored in the target \| 1 of 2 sub-areas \| A2 \| 2 \| PM \|'
+        $md | Should -Match 'Selected source areas without target placement \| 0 area\(s\)'
         $md | Should -Match '1 families, 2 tags on 4 work items'
         $md | Should -Match 'more than 5 work items'
         $md | Should -Match '\| 7 \| Rogue \|'
@@ -483,6 +512,16 @@ Describe 'ConvertTo-GovernancePreflightReport' {
         $first = [System.IO.File]::ReadAllBytes($out)
         ConvertTo-GovernancePreflightReport -DataPath $script:renderData -FindingsPath $script:renderFind | Out-Null
         [System.IO.File]::ReadAllBytes($out) | Should -Be $first
+    }
+
+    It 'shows selected areas outside the source projection root' {
+        $outsideData = Join-Path $script:renderDir 'outside-data.json'
+        $d = Get-Content $script:renderData -Raw | ConvertFrom-Json -AsHashtable -Depth 20
+        $d['unmappedAreas'] = @(@{ source = '\LegacyPortal\Platform'; workItems = 2 })
+        $d | ConvertTo-Json -Depth 20 | Set-Content $outsideData -Encoding utf8
+        $md = Get-Content (ConvertTo-GovernancePreflightReport -DataPath $outsideData -FindingsPath $script:renderFind) -Raw
+        $md | Should -Match ([regex]::Escape('| 2 | `\LegacyPortal\Platform` | outside source root — target placement required |'))
+        $md | Should -Match 'Selected source areas without target placement \| 1 area\(s\)'
     }
 
     It 'splices an observations fragment between the markers and leaves every table byte unchanged' {
@@ -503,11 +542,31 @@ Describe 'ConvertTo-GovernancePreflightReport' {
 
         $scopedData = Join-Path $script:renderDir 'scoped-data.json'
         $d = Get-Content $script:renderData -Raw | ConvertFrom-Json -AsHashtable -Depth 20
-        $d['scope'] = [ordered]@{ query = "[System.IterationPath] NOT UNDER 'X\ARCHIVE'"; label = '2026.1 onwards' }
+        $d['scope'] = [ordered]@{ query = "SELECT [System.Id] FROM WorkItems WHERE [System.IterationPath] NOT UNDER 'X\ARCHIVE'"; label = '2026.1 onwards' }
         $d | ConvertTo-Json -Depth 20 | Set-Content $scopedData -Encoding utf8
         $scoped = Get-Content (ConvertTo-GovernancePreflightReport -DataPath $scopedData -FindingsPath $script:renderFind) -Raw
-        $scoped | Should -Match '2026\.1 onwards — `\[System\.IterationPath\] NOT UNDER'
+        $scoped | Should -Match '2026\.1 onwards — `SELECT \[System\.Id\] FROM WorkItems WHERE'
         $scoped | Should -Not -Match 'no migration query declared'
+    }
+
+    It 'withholds an observations fragment older than the findings it comments on' {
+        $frag = Join-Path $script:renderDir 'stale-observations.md'
+        Set-Content $frag '- **Something.** Written against an earlier analysis.'
+        # Findings regenerated AFTER the fragment: the commentary may now
+        # contradict the tables, so it must not be spliced.
+        (Get-Item $script:renderFind).LastWriteTimeUtc = (Get-Item $frag).LastWriteTimeUtc.AddMinutes(5)
+        $stale = Get-Content (ConvertTo-GovernancePreflightReport -DataPath $script:renderData `
+            -FindingsPath $script:renderFind -ObservationsPath $frag) -Raw
+        $stale | Should -Match 'Observations withheld'
+        $stale | Should -Not -Match 'Written against an earlier analysis'
+
+        # Same fragment, rewritten after the findings: spliced normally.
+        Set-Content $frag '- **Something.** Written against the current analysis.'
+        (Get-Item $script:renderFind).LastWriteTimeUtc = (Get-Item $frag).LastWriteTimeUtc.AddMinutes(-5)
+        $fresh = Get-Content (ConvertTo-GovernancePreflightReport -DataPath $script:renderData `
+            -FindingsPath $script:renderFind -ObservationsPath $frag) -Raw
+        $fresh | Should -Match 'Written against the current analysis'
+        $fresh | Should -Not -Match 'Observations withheld'
     }
 
     It 'refuses a findings document that is not a preflight report' {
@@ -548,11 +607,12 @@ Describe 'sources.yaml scope (the migration query)' {
         }
     }
 
-    It 'rejects a whole query, an unknown field, and a missing query' {
+    It 'accepts a whole query and rejects a fragment, an unknown field, and a missing query' {
         InModuleScope NKDAgility.AzureDevOps.Governance -Parameters @{ resolved = $script:resolved } {
             param($resolved)
-            $whole = @(Test-GovernanceSources -Sources $null -Resolved $resolved -Scope @{ query = "SELECT [System.Id] FROM WorkItems WHERE [System.State] = 'Active'" })
-            @($whole | Where-Object { $_ -like '*boolean FRAGMENT only*' }).Count | Should -Be 1
+            Test-GovernanceSources -Sources $null -Resolved $resolved -Scope @{ query = "SELECT [System.Id] FROM WorkItems WHERE [System.State] = 'Active'" } | Should -BeNullOrEmpty
+            $fragment = @(Test-GovernanceSources -Sources $null -Resolved $resolved -Scope @{ query = "[System.State] = 'Active'" })
+            @($fragment | Where-Object { $_ -like '*flat WIQL SELECT*' }).Count | Should -Be 1
 
             $odd = @(Test-GovernanceSources -Sources $null -Resolved $resolved -Scope @{ wiql = 'x' })
             @($odd | Where-Object { $_ -like "*'wiql' is not a scope field*" }).Count | Should -Be 1
@@ -565,11 +625,11 @@ Describe 'sources.yaml scope (the migration query)' {
             param($resolved)
             $bad = @{ 'PTL-FND' = @{ org = 'o'; project = 'p'; areaPath = 'p\x'; scope = @{ query = 'ORDER BY [System.Id]' } } }
             $issues = @(Test-GovernanceSources -Sources $bad -Resolved $resolved)
-            @($issues | Where-Object { $_ -like "*'PTL-FND' scope query must be a boolean FRAGMENT only*" }).Count | Should -Be 1
+            @($issues | Where-Object { $_ -like '*scope.query must be a flat WIQL*' }).Count | Should -Be 1
         }
     }
 
-    It 'ANDs the fragment into the WIQL wrapped in parentheses, and omits the clause when unset' {
+    It 'pages a complete query without imposing the configured area and uses the area when no query is supplied' {
         InModuleScope NKDAgility.AzureDevOps.Governance {
             $script:captured = [System.Collections.Generic.List[string]]::new()
             Mock Invoke-AdoRest {
@@ -577,16 +637,53 @@ Describe 'sources.yaml scope (the migration query)' {
                 return @{ value = @() }
             }
             Get-AdoWorkItemUsageUnderArea -OrgUrl 'https://x' -Project 'P' -AreaPath 'P\A' `
-                -Filter "[System.State] <> 'Closed' OR [System.Tag] CONTAINS 'keep'" | Out-Null
+                -Query "SELECT [System.Id] FROM WorkItems WHERE [System.TeamProject] = 'P' AND ([System.AreaPath] UNDER 'P\A' OR [System.AreaPath] UNDER 'P\B') ORDER BY [System.ChangedDate] DESC" | Out-Null
             Get-AdoWorkItemUsageUnderArea -OrgUrl 'https://x' -Project 'P' -AreaPath 'P\A' | Out-Null
 
             # -BeLike would read '[System.State]' as a wildcard character class,
             # so compare literally.
             $lit = { param($s) [regex]::Escape($s) }
-            # Parenthesised, so an authored OR cannot bind against the area predicate.
-            $script:captured[0] | Should -Match (& $lit "UNDER 'P\A' AND ([System.State] <> 'Closed' OR [System.Tag] CONTAINS 'keep') AND [System.Id] > 0")
-            $script:captured[1] | Should -Match (& $lit "UNDER 'P\A' AND [System.Id] > 0")
+            $script:captured[0] | Should -Match (& $lit "UNDER 'P\A' OR [System.AreaPath] UNDER 'P\B')) AND [System.Id] > 0")
+            $script:captured[0] | Should -Not -Match 'ChangedDate'
+            $script:captured[1] | Should -Match (& $lit "UNDER 'P\A') AND [System.Id] > 0")
             $script:captured[1] | Should -Not -Match '\(\)'
+        }
+    }
+
+    It 'keeps WIQL keywords inside quoted values when replacing authored ordering' {
+        InModuleScope NKDAgility.AzureDevOps.Governance {
+            $where = Get-AdoWiqlWhereClause -Query "SELECT [System.Id] FROM WorkItems WHERE [System.Title] CONTAINS 'foo ORDER BY bar; ASOF MODE' AND [System.TeamProject] = 'P' ORDER BY [System.ChangedDate] DESC"
+            $where | Should -Be "[System.Title] CONTAINS 'foo ORDER BY bar; ASOF MODE' AND [System.TeamProject] = 'P'"
+        }
+    }
+
+    It 'rejects an incomplete work item batch instead of reporting partial counts' {
+        InModuleScope NKDAgility.AzureDevOps.Governance {
+            Mock Invoke-AdoRest {
+                if ($Path -like '*wiql*') { return @{ workItems = @(@{ id = 1 }, @{ id = 2 }) } }
+                return @{ value = @(@{ id = 1; fields = @{} }) }
+            }
+            { Get-AdoWorkItemUsageUnderArea -OrgUrl 'https://x' -Project 'P' -AreaPath 'P\A' } |
+                Should -Throw '*different ID set*'
+        }
+    }
+
+    It 'pages beyond the WIQL result limit without losing selected IDs' {
+        InModuleScope NKDAgility.AzureDevOps.Governance {
+            $script:cursors = [System.Collections.Generic.List[int]]::new()
+            Mock Invoke-AdoRest {
+                if ($Path -like '*wiql*') {
+                    $cursor = [int]([regex]::Match([string]$Body.query, '\[System\.Id\] > (\d+)').Groups[1].Value)
+                    $script:cursors.Add($cursor)
+                    if ($cursor -eq 0) { return @{ workItems = @(1..19999 | ForEach-Object { @{ id = $_ } }) } }
+                    if ($cursor -eq 19999) { return @{ workItems = @(@{ id = 20000 }) } }
+                    return @{ workItems = @() }
+                }
+                return @{ value = @($Body.ids | ForEach-Object { @{ id = $_; fields = @{} } }) }
+            }
+            $usage = Get-AdoWorkItemUsageUnderArea -OrgUrl 'https://x' -Project 'P' -AreaPath 'P\A'
+            $usage.WorkItemCount | Should -Be 20000
+            @($script:cursors) | Should -Be @(0, 19999, 20000)
         }
     }
 }
@@ -648,7 +745,7 @@ Describe 'Invoke-GovernancePreflight -SkipFresh' {
             # Must carry the SAME migration query the fixture declares, or the
             # scope-change check below correctly refuses to reuse it.
             $scoped = $script:fndData | ConvertTo-Json -Depth 20 | ConvertFrom-Json -AsHashtable -Depth 20
-            $scoped['scope'] = [ordered]@{ query = "[System.IterationPath] NOT UNDER 'LegacyPortal\ARCHIVE'"; label = 'the current release line' }
+            $scoped['scope'] = [ordered]@{ query = "SELECT [System.Id] FROM WorkItems WHERE [System.TeamProject] = 'LegacyPortal' AND [System.IterationPath] NOT UNDER 'LegacyPortal\ARCHIVE'"; label = 'the current release line' }
             $scoped | ConvertTo-Json -Depth 20 | Set-Content $dataPath -Encoding utf8
             $stamp = (Get-Item $dataPath).LastWriteTimeUtc
             # Reusing matching data must bypass authentication and gathering.
@@ -682,7 +779,7 @@ Describe 'Invoke-GovernancePreflight -SkipFresh' {
             $json.findings[0].message | Should -Match 'Simulated gather failure'
             Should -Invoke Initialize-AdoAuth -ModuleName NKDAgility.AzureDevOps.Governance -Times 1 -Exactly
             Should -Invoke Get-GovernancePreflightData -ModuleName NKDAgility.AzureDevOps.Governance -Times 1 -Exactly -ParameterFilter {
-                $Code -eq 'PTL-FND' -and $Scope.query -eq "[System.IterationPath] NOT UNDER 'LegacyPortal\ARCHIVE'"
+                $Code -eq 'PTL-FND' -and $Scope.query -eq "SELECT [System.Id] FROM WorkItems WHERE [System.TeamProject] = 'LegacyPortal' AND [System.IterationPath] NOT UNDER 'LegacyPortal\ARCHIVE'"
             }
             # and the stale data file is left exactly as it was
             (Get-Content $dataPath -Raw | ConvertFrom-Json).scope.label | Should -Be 'something else'

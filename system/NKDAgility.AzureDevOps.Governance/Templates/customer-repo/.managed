@@ -15,5 +15,5 @@ governance/init.ps1
 .claude/workflows/audit-preflight.js
 .claude/agents/governance-runner.md
 .claude/agents/preflight-reporter.md
-.claude/skills/preflight-report/SKILL.md
+.claude/skills/preflight-observations/SKILL.md
 .claude/hooks/deny-governance-apply.ps1

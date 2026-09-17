@@ -13,9 +13,9 @@
 export const meta = {
   name: 'audit-preflight',
   description: 'Gather and render per-team governance preflight fix reports, write and verify their observations, and summarise the run',
-  whenToUse: 'When the operator runs /audit-preflight, or asks for the pre-migration fix reports for every team (or named teams) in a governance program. Pass args as {program, codes?, check?, batch?}. The gather reuses fresh data files, so re-running after a sign-in expiry only fetches the missing teams.',
+  whenToUse: 'When the operator runs /audit-preflight, or asks for the pre-migration fix reports for every team (or named teams) in a governance program. Pass args as {program, codes?, check?, batch?, resume?}. Every run gathers fresh from the source organisation; pass resume:true ONLY to continue a run cut short by an expired sign-in, which reuses the data files already on disk.',
   phases: [
-    { title: 'Gather',    detail: 'One sequential preflight over every code, reusing fresh data files', model: 'haiku' },
+    { title: 'Gather',    detail: 'One sequential preflight over every code, fresh from the source org', model: 'haiku' },
     { title: 'Render',    detail: 'preflight-report renders every gathered team; manifest of files',   model: 'haiku' },
     { title: 'Observe',   detail: 'One preflight-reporter per team writes observations-<code>.md',     model: 'fable' },
     { title: 'Check',     detail: 'Every number in each fragment must exist in that team\'s data',     model: 'haiku' },
@@ -69,14 +69,19 @@ async function spawn(prompt, opts) {
   return agent(prompt, rest)
 }
 
+// End to end means end to end: gather FRESH every time. Reusing an existing
+// data file is the resume path for a run cut short by an expired sign-in, and
+// it is opt-in (args.resume) because a silent reuse is how a report ends up
+// describing a source that has since moved on.
+const resume = !!(args && args.resume)
 const codeArgs = codes ? codes.map(c => `-Code ${c}`) : ['']
 const gatherCommand = codeArgs
-  .map(c => `Invoke-Governance preflight ${program} ${c} -SkipFresh`.replace(/\s+/g, ' ').trim())
+  .map(c => `Invoke-Governance preflight ${program} ${c}${resume ? ' -SkipFresh' : ''}`.replace(/\s+/g, ' ').trim())
   .join('; ')
 
 // ── Gather ────────────────────────────────────────────────────────────────────
 phase('Gather')
-log(`Gathering ${codes ? codes.join(', ') : 'every team in sources.yaml'} for '${program}' (fresh data files are reused)`)
+log(`Gathering ${codes ? codes.join(', ') : 'every team in sources.yaml'} for '${program}' — ${resume ? 'RESUME: reusing data files already on disk' : 'fresh from the source organisation'}`)
 const gathered = await spawn(
   `In this workspace, run ONE PowerShell process:
 
@@ -115,7 +120,7 @@ const observePrompt = (t, feedback) =>
   `Write the Observations fragment for team ${t.code}.
 Inputs: ${t.dataPath} and ${t.findingsPath}; the rendered report is ${t.reportPath}.
 Output: ${t.observationsPath} — write this file and nothing else.
-Follow .claude/skills/preflight-report/SKILL.md exactly.${feedback ? `
+Follow .claude/skills/preflight-observations/SKILL.md exactly.${feedback ? `
 
 A checker could not find these numbers in the inputs: ${feedback.join(', ')}. Remove or replace every one of them with a number that appears verbatim in the data or findings file, or refer to the report's table instead.` : ''}`
 
