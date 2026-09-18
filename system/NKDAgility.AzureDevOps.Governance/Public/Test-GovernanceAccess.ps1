@@ -31,6 +31,15 @@ function Test-GovernanceAccess {
     Write-Host "Checking access for '$projectName' in $orgUrl  [auth: $identity]" -ForegroundColor Cyan
     Write-Host "(read probes + intentionally invalid writes - no changes are made)" -ForegroundColor DarkGray
 
+    # The az context this ran in, reported before any scope verdict: a good
+    # share of the "missing scope" reports that reach us are the right scopes
+    # held by the wrong identity, and that is visible here for nothing (ADR-012).
+    Write-Host "`nAzure CLI context" -ForegroundColor Cyan
+    Write-Host "  profile: $(if ($env:AZURE_CONFIG_DIR) { $env:AZURE_CONFIG_DIR } else { Join-Path $HOME '.azure' })" -ForegroundColor DarkGray
+    Show-GovernanceAzContextPlacement -Manifest $manifest -ProgramPath $ProgramPath | Out-Null
+    Confirm-GovernanceAzAccount -Context (Get-GovernanceAzContext -Manifest $manifest) | Out-Null
+    Write-Host ''
+
     $results = @(Test-AdoAuthScope -OrgUrl $orgUrl -Project $projectName)
     foreach ($r in $results) {
         switch ($r.Verdict) {

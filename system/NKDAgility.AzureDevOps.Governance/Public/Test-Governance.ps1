@@ -15,6 +15,7 @@ function Test-Governance {
     $resolved = Resolve-Governance -Manifest $source.Manifest -Source $source.Hierarchy -Access $source.Access -Members $source.Members -SourceHash $source.Hash -Systems $source.Systems
 
     $issues = Test-ResolvedGovernance -Resolved $resolved
+    $issues += Test-GovernanceAzManifest -Manifest $source.Manifest
     $issues += Test-GovernanceSources -Sources $source.Sources -Resolved $resolved -Labels $source.SourceLabels `
         -Reporting $source.SourceReporting -Scope $source.SourceScope
 
@@ -32,5 +33,16 @@ function Test-Governance {
     }
 
     Write-Host "Governance '$program' is valid." -ForegroundColor Green
+
+    # Where the Azure CLI context is declared, and whether anything competes
+    # with it (ADR-012). Reported after the verdict because none of it makes
+    # the authored source invalid — a program with no azure: block is valid,
+    # it just has no identity of its own. Stated even when there is nothing
+    # wrong: a check whose only output is silence teaches nobody it exists.
+    $azCtx = Get-GovernanceAzContext -Manifest $source.Manifest
+    if ($azCtx -and $azCtx.ProfileDir) {
+        Write-Host "Azure CLI profile: $($azCtx.ProfileDir)  (manifest.yaml azure:; sign in with 'connect')" -ForegroundColor DarkGray
+    }
+    Show-GovernanceAzContextPlacement -Manifest $source.Manifest -ProgramPath $ProgramPath | Out-Null
     return $true
 }

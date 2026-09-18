@@ -19,6 +19,35 @@ previously left alone, without a line of consumer code changing.
 
 ### Added
 
+- **A program declares the Azure CLI context it runs in** (ADR-012), through an
+  optional `manifest.yaml azure:` block — `profile`, `tenant`, `subscription`,
+  `signInAs`. `az login` is global to the user, so a customer sign-in and every
+  other az-dependent job on the same workstation previously clobbered each other
+  in silence; a declared `profile` gives the program its own Azure CLI world
+  under `~/.azure-profiles/<name>`, entered for the run's process only and
+  restored afterwards. `signInAs` is checked before any token is requested, so a
+  wrong active account is one sentence naming both identities instead of
+  `AADSTS50020 user account does not exist in tenant`, which reads like a
+  permissions fault and is not one. Programs that declare nothing keep the
+  machine default and are unaffected; CI is unaffected.
+
+- `connect` (`Connect-GovernanceAz`) — signs in to every organisation a program
+  touches, target and preflight sources, discovering each one's Entra tenant and
+  pinning the sign-in to it and to the Azure DevOps scope. Always reports the az
+  profile directory it used, warns when a program spans more than one tenant
+  (one profile holds one active account), and puts the shell back on the machine
+  default unless `-Keep` is passed.
+
+- **The az context is checked for shape and for placement.** `validate` rejects
+  unknown `azure:` keys, a non-GUID tenant and a `signInAs` that is not a UPN —
+  a typo there otherwise produces a run that works against the wrong identity
+  and fails much later. `validate`, `connect` and `doctor` additionally report
+  where the configuration lives: no block at all (with a pasteable one, filled
+  from the tenant and account just discovered), an `AZURE_CONFIG_DIR` set from a
+  shell or `.claude/settings*.json` competing with the manifest, a declared
+  profile with no sign-in yet, and — as an error — a profile path resolving
+  inside a repository, because the directory holds refresh tokens.
+
 - Explicitly typed hierarchy sections can own a team, repositories and a
   pipeline folder directly on the section area, avoiding a duplicate nested
   node. Existing untyped sections retain their grouping behaviour. Section

@@ -224,6 +224,7 @@ for.
 | `preflight` | Per incoming team: *if this team moved in today, what would fail?* Reads its pre-migration location from `sources.yaml` and evaluates it with the same rules `audit` uses. | No |
 | `preflight-report` | Render each gathered team's markdown fix report from the files `preflight` wrote. Offline and deterministic — no organisation is contacted. | No |
 | `doctor` | Probe the current identity's permissions against the live org with side-effect-free calls. Exits non-zero listing what is missing. | No |
+| `connect` | Sign in to every organisation the program touches — target and preflight sources — as the identity each one accepts, in the program's own Azure CLI profile. | No |
 
 ### `apply` is corrective, not just additive
 
@@ -557,6 +558,64 @@ If you must use a PAT, the required scopes are listed in
 writes need permissions no PAT scope short of full access grants; the engine
 falls back to an Entra token from your `az login` session for those.
 
+### Each program signs in as itself
+
+`az login` is global to the user. One workstation that runs governance for a
+customer *and* scheduled jobs against other tenants has a problem: signing in
+for the customer signs you out of everything else, and signing in elsewhere
+leaves the next governance run holding a token for the wrong identity. Azure
+DevOps rejects that with `AADSTS50020 user account does not exist in tenant`,
+which reads like a permissions fault and is not one.
+
+So a program declares the Azure CLI context it runs in, in `manifest.yaml`
+beside `org` and `auth` — because the identity belongs to the program, not to
+the machine that happens to run it:
+
+```yaml
+azure:
+  profile:      contoso                              # an az world of its own
+  tenant:       00000000-0000-0000-0000-000000000000 # else discovered from the org
+  subscription: 00000000-0000-0000-0000-000000000000 # made active after sign-in
+  signInAs:     you@contoso.com                      # which identity — a UPN, never a secret
+```
+
+- **`profile`** is the isolation. Azure CLI keeps its whole state — accounts,
+  active subscription, token cache — under `AZURE_CONFIG_DIR`; a bare name
+  resolves to `~/.azure-profiles/<name>` and is set for the run's process only.
+  Nothing else on the machine is affected, because an environment variable does
+  not travel upwards. It resolves **outside every repository** on purpose: a
+  profile directory holds refresh tokens, and a token store in a working tree is
+  one bad `.gitignore` away from being published.
+- **`tenant`** is declared rather than discovered because an organisation only
+  advertises its tenant on a response that actually challenges for
+  authentication — an anonymous probe answers `203` with no header, and that is
+  indistinguishable from "not Entra-backed".
+- **`signInAs`** turns the wrong-account case into one sentence naming both
+  identities, *before* a token is requested.
+
+Every command enters the profile automatically; `connect` signs in to it. The
+whole block is optional — a program that declares none uses the machine default
+and behaves exactly as it always has, which is what CI does.
+
+**The configuration is checked, not assumed.** `validate` rejects unknown keys,
+a non-GUID tenant and a `signInAs` that is not a UPN, because a typo here
+produces a run that works against the wrong identity and fails much later. It
+also checks the block is in the right *place*, and `connect` and `doctor`
+report the same thing:
+
+| Situation | What you are told |
+| --- | --- |
+| No `azure:` block | The exact file it belongs in, and a block filled with the tenant and account just discovered — ready to paste |
+| `AZURE_CONFIG_DIR` set from a shell profile or `.claude/settings.json` | Which value competes with the manifest, which one wins, and that only the manifest is in source control |
+| `profile` resolving inside a repository | An **error** — refresh tokens do not belong in a working tree |
+| Profile declared but never signed in | Run `connect` |
+
+One profile holds one *active* account, so a program spanning two Entra tenants
+still needs a PAT per organisation; `connect` says so rather than leaving you to
+discover it. And because the sign-in persists on disk, `connect` puts your shell
+back on the machine default when it finishes — pass `-Keep` to stay in the
+program's profile.
+
 ---
 
 ## Repository layout
@@ -598,6 +657,7 @@ The reasoning behind the non-obvious choices is recorded in
 | [ADR-009](.agents/decisions/ADR-009-preflight-report-orchestration.md) | The renderer owns the fix report; agents write one observations fragment |
 | [ADR-010](.agents/decisions/ADR-010-preflight-migration-query-scope.md) | The migration query scopes preflight; the 2026-09-17 amendment accepts a complete WIQL query with multiple source areas |
 | [ADR-011](.agents/decisions/ADR-011-tag-dispositions.md) | A tag that is not sanctioned still needs a destination: board column, retirement, or a decision |
+| [ADR-012](.agents/decisions/ADR-012-program-azure-cli-context.md) | A program declares the Azure CLI context it runs in, so a customer sign-in cannot disturb the rest of the machine |
 
 ---
 

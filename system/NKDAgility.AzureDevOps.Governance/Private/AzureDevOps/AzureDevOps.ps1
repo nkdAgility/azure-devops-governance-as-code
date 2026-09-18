@@ -335,6 +335,13 @@ function Initialize-AdoAuth {
         [Parameter(Mandatory)][string]$OrgUrl
     )
 
+    # Point az at the profile this program declares BEFORE asking it for
+    # anything (ADR-012). Without this the run borrows whatever identity the
+    # machine happens to have active, which is how a customer's command ends up
+    # authenticating as another customer's account.
+    Enter-GovernanceAzContext -Manifest $Manifest | Out-Null
+    Confirm-GovernanceAzAccount -Context (Get-GovernanceAzContext -Manifest $Manifest) | Out-Null
+
     $token = Resolve-AccessToken $Manifest.accessToken
     $entra = Get-AdoEntraToken -Optional
     if ($entra -and -not (Test-AdoEntraSession -OrgUrl $OrgUrl -Token $entra)) {

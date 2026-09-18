@@ -15,6 +15,7 @@ organisation, and reconciled.
 | `Invoke-GovernanceAudit -ProgramPath <path>` | live organisation | a compliance report |
 | `Invoke-GovernancePreflight -ProgramPath <path> [-Code <code>] [-Offline] [-SkipFresh]` | the SOURCE org named in `sources.yaml` + the target org (`-Offline`: only the last gathered data; `-SkipFresh`: only nodes with no data file yet) | per node, in `preflight\<CODE>\`: `-data.json` (facts) + `-findings.txt/.json` — read-only against both orgs |
 | `Invoke-GovernancePreflightReport -ProgramPath <path> [-Code <code>]` | the data + findings files already written, plus `-observations.md` if present | `-report.md` per node — offline, deterministic, no AI |
+| `Connect-GovernanceAz -ProgramPath <path> [-Code <code>] [-Keep]` | every organisation the program touches, target and sources | nothing in Azure DevOps — signs in to the program's own az profile on disk |
 
 ### Rules
 
@@ -75,6 +76,17 @@ organisation, and reconciled.
 - **`manifest.yaml` names an environment variable, never a token.** Secrets live in the
   workspace `secrets/secrets.json` and are exported before this capability loads. Never
   write a PAT into a program file — they are committed.
+- **`manifest.yaml azure:` declares the program's Azure CLI context, and `connect` is the
+  only sign-in you need.** `az login` is global to the user, so without this a customer
+  sign-in and every other az-dependent job on the machine clobber each other in silence.
+  The block is optional — `profile` (an az world of its own under `~/.azure-profiles/`,
+  **never inside a repository**: it holds refresh tokens), `tenant`, `subscription`, and
+  `signInAs` (a UPN, never a secret, which turns a wrong active account into one sentence
+  instead of `AADSTS50020`). Every command enters the profile for its own process only, so
+  nothing else on the machine is affected, and restores it on the way out. `validate`
+  checks the block's shape *and its placement* — missing, contested by an `AZURE_CONFIG_DIR`
+  set elsewhere, or pointing inside a working tree — and `connect` and `doctor` report the
+  same. A program that declares nothing uses the machine default, exactly as before.
 - **Silent failure is a bug.** If a function cannot complete its work it throws. Returning
   `$null`, an empty set or `$false` on failure hides a broken reconcile; do not add
   fallbacks that swallow errors.

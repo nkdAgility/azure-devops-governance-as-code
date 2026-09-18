@@ -43,6 +43,18 @@ Mode resolution (`Resolve-AdoAuthMode` / `Initialize-AdoAuth`):
 
 `doctor` prints which identity it is testing (`[auth: Entra (user@…)]` or `[auth: PAT]`) — in entra mode a `[MISSING]` row means the *identity* lacks the permission in the org, not a token scope problem.
 
+### The program's az context (ADR-012)
+
+`az login` is global to the user, so a customer sign-in and the machine's other jobs otherwise take turns clobbering each other. `manifest.yaml azure:` declares the context a program runs in — `profile`, `tenant`, `subscription`, `signInAs`, all optional:
+
+- `Get-GovernanceAzContext` resolves it. A bare `profile` name → `~/.azure-profiles/<name>`; absolute or `~`-rooted paths as given. **Outside every working tree, always** — the directory holds refresh tokens.
+- `Enter-GovernanceAzContext` sets `$env:AZURE_CONFIG_DIR` process-scoped; `Exit-GovernanceAzContext` restores it. `Initialize-AdoAuth` — the choke point every live command already goes through — enters it and calls `Confirm-GovernanceAzAccount` before any token is requested, so a wrong active account is one sentence rather than `AADSTS50020`.
+- Process-scoped, not tighter, on purpose: preflight authenticates against two organisations in one run.
+- `Test-GovernanceAzManifest` validates the block offline (unknown keys, non-GUID tenant, `signInAs` without an `@`). `Test-GovernanceAzContextPlacement` checks it is in the right *place* — declared at all, not contested by `AZURE_CONFIG_DIR` from a shell or `.claude/settings*.json`, and not resolving inside a repository (that one is an `error`). `validate`, `connect` and `doctor` all show it.
+- A program declaring nothing gets the machine default and behaves exactly as before. CI is unaffected.
+
+**Never write a sign-in helper that touches the machine's default profile.** The isolation is the whole point, and it only works if every path goes through `Enter-GovernanceAzContext`.
+
 ## Required PAT scopes (auth: pat / CI fallback only)
 
 When a PAT is used, it must carry these scopes (Azure DevOps → User settings → Personal access tokens):
@@ -304,6 +316,7 @@ Key decisions are recorded in `.agents/decisions/`. Read these before making str
 | [ADR-009](decisions/ADR-009-preflight-report-orchestration.md) | The renderer owns the per-team fix report; agents write one observations fragment; the engine ships `/audit-preflight`, its workflow, subagents, skill and a deny-apply hook as managed `.claude/` templates |
 | [ADR-010](decisions/ADR-010-preflight-migration-query-scope.md) | The migration query is a committed WIQL fragment in `sources.yaml scope:`, shared with the migration toolchain, and it scopes what preflight validates |
 | [ADR-011](decisions/ADR-011-tag-dispositions.md) | `taxonomy.yaml` records a destination per unsanctioned tag — `boardColumns`, `retire`, or undecided — plus `sanctionedPatterns` for families minted per season; no "tolerated" state, because the audit knows only the sanctioned list |
+| [ADR-012](decisions/ADR-012-program-azure-cli-context.md) | `manifest.yaml azure:` declares the program's Azure CLI profile, tenant, subscription and `signInAs`; every command enters it per process so a customer sign-in cannot disturb the machine's other jobs, and `validate`/`connect`/`doctor` check the block is present, uncontested and outside every working tree |
 
 ---
 

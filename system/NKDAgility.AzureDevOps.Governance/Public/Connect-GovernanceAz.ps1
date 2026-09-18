@@ -26,7 +26,12 @@ function Connect-GovernanceAz {
     param(
         [Parameter(Mandatory)][string]$ProgramPath,
         [string]$Code,
-        [string]$Org
+        [string]$Org,
+        # Keep the program's az profile active in THIS shell afterwards. Without
+        # it the profile is restored on exit: the sign-in persists on disk and
+        # every governance command finds it, but a bare `az` typed here is back
+        # on the machine default, which is the point of the isolation.
+        [switch]$Keep
     )
 
     $source   = Import-GovernanceSource -ProgramPath $ProgramPath
@@ -43,23 +48,38 @@ function Connect-GovernanceAz {
     }
     if ($targets.Count -eq 0) { throw "No organisations to connect: '$ProgramPath' has no manifest org and no sources.yaml entries." }
 
+    # Enter the program's own az world first, if it declares one (ADR-012), so
+    # everything below reads and writes that profile rather than the machine's.
+    $azState  = Enter-GovernanceAzContext -Manifest $manifest -Quiet
+    $ctx      = $azState.Context
+    $declared = [bool]($ctx -and $ctx.ProfileDir)
+
     $profileDir = if ($env:AZURE_CONFIG_DIR) { $env:AZURE_CONFIG_DIR } else { Join-Path $HOME '.azure' }
     Write-Host "`nAzure CLI profile: $profileDir" -ForegroundColor Cyan
-    Write-Host ("  " + $(if ($env:AZURE_CONFIG_DIR) {
-                'AZURE_CONFIG_DIR is set, so this is an az world of its own — a sign-in done in a shell WITHOUT that variable will not be seen here.'
+    Write-Host ("  " + $(if ($declared) {
+                'declared by this program (manifest azure.profile), so this sign-in is its own and cannot disturb the machine default.'
+            } elseif ($env:AZURE_CONFIG_DIR) {
+                'AZURE_CONFIG_DIR is set in this shell — a sign-in done WITHOUT that variable will not be seen here.'
             } else {
-                'the machine default — this sign-in affects every other az session for this user.'
+                'the machine default — this sign-in affects every other az session for this user. Declare azure.profile in manifest.yaml to give this program its own.'
             })) -ForegroundColor DarkGray
 
     $current = (az account show --query 'user.name' -o tsv 2>$null)
     Write-Host "  signed in as: $(if ($current) { $current } else { '(nobody)' })" -ForegroundColor DarkGray
+    if ($ctx -and $ctx.SignInAs)     { Write-Host "  program declares signInAs:     $($ctx.SignInAs)" -ForegroundColor DarkGray }
+    if ($ctx -and $ctx.Subscription) { Write-Host "  program declares subscription: $($ctx.Subscription)" -ForegroundColor DarkGray }
 
     # Probe each organisation: which tenant, and can we reach it already?
     Write-Host "`nOrganisations" -ForegroundColor Cyan
     $needed = [ordered]@{}
     $entra  = Get-AdoEntraToken -Optional
+    $discoveredTenant = $null
     foreach ($orgUrl in $targets.Keys) {
-        $tenant = Get-AdoOrgTenant -OrgUrl $orgUrl
+        # A declared tenant wins over discovery: an organisation only advertises
+        # its tenant on a response that actually challenges, so a network that
+        # answers 203 would otherwise look like "not Entra-backed".
+        $tenant = if ($ctx -and $ctx.Tenant) { $ctx.Tenant } else { Get-AdoOrgTenant -OrgUrl $orgUrl }
+        if ($tenant -and -not $discoveredTenant) { $discoveredTenant = $tenant }
         $ok     = $entra -and (Test-AdoEntraSession -OrgUrl $orgUrl -Token $entra)
         $state  = if ($ok) { 'reachable now' }
                   elseif (-not $tenant) { 'no Entra tenant advertised - use a PAT (sources.yaml accessToken)' }
@@ -75,8 +95,18 @@ function Connect-GovernanceAz {
         }
     }
 
+    # Where this program's az context is configured, and whether anything else
+    # is competing with it (ADR-012). Reported here rather than at the top
+    # because the tenant has now been discovered, so a program with nothing
+    # declared gets a block it can paste rather than one to fill in.
+    Write-Host "`nConfiguration" -ForegroundColor Cyan
+    $placed = Show-GovernanceAzContextPlacement -Manifest $manifest -ProgramPath $ProgramPath `
+        -Tenant $discoveredTenant -SignInAs $current -Subscription (az account show --query 'id' -o tsv 2>$null)
+    if ($placed -and $declared) { Write-Host "  declared in manifest.yaml, uncontested." -ForegroundColor DarkGray }
+
     if ($needed.Count -eq 0) {
         Write-Host "`nNothing to do - every organisation is reachable with the current sign-in." -ForegroundColor Green
+        if ($declared -and -not $Keep) { Exit-GovernanceAzContext -State $azState }
         return
     }
     if ($needed.Count -gt 1) {
@@ -101,7 +131,12 @@ function Connect-GovernanceAz {
                 "add --use-device-code to the command above and complete it in a browser elsewhere.")
         }
         Write-Host "  signed in as: $(az account show --query 'user.name' -o tsv 2>$null)" -ForegroundColor Green
+        Confirm-GovernanceAzAccount -Context $ctx | Out-Null
     }
 
     Write-Host "`nA sign-in lasts as long as the organisation's Conditional Access policy allows - a sign-in frequency of a few hours is common, and the engine reports a rejected token as such. Re-run this when that happens." -ForegroundColor DarkGray
+    if ($declared -and -not $Keep) {
+        Exit-GovernanceAzContext -State $azState
+        Write-Host "The sign-in is stored in the program's profile, so every governance command will find it. This shell is back on the machine default - pass -Keep to stay in the program's profile here." -ForegroundColor DarkGray
+    }
 }
