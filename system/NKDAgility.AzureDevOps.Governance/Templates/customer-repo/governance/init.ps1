@@ -26,6 +26,7 @@
     init.ps1 exports them, and manifest.yaml references one by name as accessToken.
 
 .EXAMPLE
+    Invoke-Governance connect   odyssey            # sign in to every org this program touches
     Invoke-Governance build     odyssey
     Invoke-Governance plan      odyssey
     Invoke-Governance audit     odyssey
@@ -123,7 +124,7 @@ function Global:Invoke-Governance {
     [CmdletBinding()]
     param(
         [Parameter(Mandatory, Position = 0)]
-        [ValidateSet('build', 'validate', 'plan', 'apply', 'audit', 'preflight', 'preflight-report')]
+        [ValidateSet('connect', 'build', 'validate', 'plan', 'apply', 'audit', 'preflight', 'preflight-report')]
         [string]$Command,
 
         [Parameter(Mandatory, Position = 1)]
@@ -148,6 +149,7 @@ function Global:Invoke-Governance {
     New-Item -Path (Split-Path -Parent $resolvedPath) -ItemType Directory -Force | Out-Null
 
     switch ($Command) {
+        'connect' { Connect-GovernanceAz -ProgramPath $programPath -Org $Org -Code $Code }
         'build' { Invoke-GovernanceBuild -ProgramPath $programPath -OutputPath $resolvedPath }
         'validate' { Test-Governance -ProgramPath $programPath }
         'plan' { Invoke-GovernancePlan -ProgramPath $programPath -ResolvedPath $resolvedPath -Org $Org }

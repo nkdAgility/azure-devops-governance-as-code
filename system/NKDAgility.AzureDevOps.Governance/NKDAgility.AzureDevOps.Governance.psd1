@@ -14,6 +14,7 @@
         'Invoke-GovernancePlan',
         'Invoke-GovernanceApply',
         'Invoke-GovernanceAudit',
+        'Connect-GovernanceAz',
         'Invoke-GovernancePreflight',
         'Invoke-GovernancePreflightReport',
         'ConvertTo-GovernancePreflightReport',

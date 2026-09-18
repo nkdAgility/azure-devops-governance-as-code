@@ -1650,6 +1650,34 @@ function Set-AdoTeamBacklogVisibilities {
 # read-only; the auth pair swaps the module-wide auth state for the duration
 # of the source-org reads and restores it afterwards.
 
+function Get-AdoOrgTenant {
+    <#
+        .SYNOPSIS
+        The Entra tenant id an organisation authenticates against, discovered
+        from the organisation itself so nobody has to be told it.
+
+        Azure DevOps only returns X-VSS-ResourceTenant on a response that
+        actually CHALLENGES for authentication. An anonymous call to
+        _apis/connectionData answers 203 with no such header, so probing that
+        reports every organisation as non-Entra. This sends an unauthenticated
+        request to a protected endpoint instead and reads the header off the
+        401.
+
+        Returns the tenant guid, or $null when the organisation does not
+        challenge with one (not Entra-backed, or unreachable).
+    #>
+    [CmdletBinding()]
+    param([Parameter(Mandatory)][string]$OrgUrl)
+    try {
+        $r = Invoke-WebRequest -Uri "$($OrgUrl.TrimEnd('/'))/_apis/projects?`$top=1" `
+            -Headers @{ Accept = 'application/json' } -MaximumRedirection 0 -SkipHttpErrorCheck -ErrorAction Stop
+        $t = [string]$r.Headers['X-VSS-ResourceTenant']
+        if ($t -and $t -notmatch '^0{8}-') { return $t.Trim() }
+        return $null
+    }
+    catch { return $null }
+}
+
 function Enter-AdoOrgAuth {
     <#
         .SYNOPSIS

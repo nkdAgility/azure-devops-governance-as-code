@@ -576,6 +576,60 @@ Describe 'ConvertTo-GovernancePreflightReport' {
     }
 }
 
+Describe 'Connect-GovernanceAz' {
+
+    It 'discovers a tenant only from a response that actually challenges' {
+        InModuleScope NKDAgility.AzureDevOps.Governance {
+            # A challenge carries the header...
+            Mock Invoke-WebRequest { @{ Headers = @{ 'X-VSS-ResourceTenant' = 'aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee' } } }
+            Get-AdoOrgTenant -OrgUrl 'https://dev.azure.com/x' | Should -Be 'aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee'
+
+            # ...an anonymous 203 does not, and an all-zero guid is not a tenant.
+            Mock Invoke-WebRequest { @{ Headers = @{} } }
+            Get-AdoOrgTenant -OrgUrl 'https://dev.azure.com/x' | Should -BeNullOrEmpty
+            Mock Invoke-WebRequest { @{ Headers = @{ 'X-VSS-ResourceTenant' = '00000000-0000-0000-0000-000000000000' } } }
+            Get-AdoOrgTenant -OrgUrl 'https://dev.azure.com/x' | Should -BeNullOrEmpty
+        }
+    }
+
+    It 'covers the target org and every source org, and signs in to none of them under -WhatIf' {
+        InModuleScope NKDAgility.AzureDevOps.Governance -Parameters @{ programPath = $script:programPath } {
+            param($programPath)
+            Mock Invoke-WebRequest { @{ Headers = @{ 'X-VSS-ResourceTenant' = 'aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee' } } }
+            Mock Get-AdoEntraToken { $null }          # nothing signed in
+            Mock Test-AdoEntraSession { $false }
+            Mock az { '' }                             # must never be invoked for a login
+
+            $out = Connect-GovernanceAz -ProgramPath $programPath -WhatIf 6>&1 | Out-String
+            $out | Should -Match 'dev\.azure\.com/nkdagility-preview'  # the manifest target
+            $out | Should -Match 'dev\.azure\.com/legacy-org'          # both fixture sources live here
+            $out | Should -Match 'SIGN-IN NEEDED'
+            $out | Should -Match 'Would run: az login --tenant'
+            $out | Should -Match 'Azure CLI profile:'                  # always names the profile
+            # no phantom empty organisation at the head of the list
+            $out | Should -Not -Match 'on target ",'
+            # reported, never performed (the one az call is the status read)
+            $out | Should -Not -Match 'Signing in for'
+        }
+    }
+
+    It 'warns when one program spans more than one tenant' {
+        InModuleScope NKDAgility.AzureDevOps.Governance -Parameters @{ programPath = $script:programPath } {
+            param($programPath)
+            $script:n = 0
+            Mock Invoke-WebRequest {
+                $script:n++
+                @{ Headers = @{ 'X-VSS-ResourceTenant' = "$($script:n)aaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee" } }
+            }
+            Mock Get-AdoEntraToken { $null }
+            Mock Test-AdoEntraSession { $false }
+            $warn = $null
+            Connect-GovernanceAz -ProgramPath $programPath -WhatIf -WarningVariable warn -WarningAction SilentlyContinue 6>$null
+            ($warn | Out-String) | Should -Match 'spans 2 Entra tenants'
+        }
+    }
+}
+
 Describe 'taxonomy.yaml tag dispositions' {
 
     It 'resolves boardColumns and retire into the model' {
