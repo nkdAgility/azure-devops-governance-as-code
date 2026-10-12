@@ -25,7 +25,8 @@ function ConvertTo-GovernancePreflightReport {
         [string]$ObservationsPath = '',
         [string]$OutputPath = '',
         [object]$Labels = $null,      # check id -> @{ rule; task; lane; ... }
-        [object]$Reporting = $null    # @{ standard; audience; candidateTagMinUses; iterationTop; title }
+        [object]$Reporting = $null    # @{ standard; audience; candidateTagMinUses; iterationTop; title;
+                                      #    preamble; scopeNote; glossary; observationsLead; labelColumns }
     )
 
     foreach ($p in $DataPath, $FindingsPath) {
@@ -74,10 +75,12 @@ function ConvertTo-GovernancePreflightReport {
     }
     $count = { param($check) if ($byCheck.ContainsKey($check)) { $byCheck[$check].Count } else { 0 } }
 
-    # Label columns: whatever the program attached, rule/task/lane first.
+    # Label columns: whatever the program attached, in `reporting.labelColumns`
+    # order when declared, else rule/task/lane first.
     $engineFields = @('class', 'check', 'subject', 'message', 'source', 'workItems', 'tags', 'examples', 'group', 'team', 'sourceTeam', 'suggestions', 'why')
     $labelKeys = [System.Collections.Generic.List[string]]::new()
-    foreach ($pref in 'rule', 'task', 'lane') { $labelKeys.Add($pref) }
+    $prefKeys  = if ($Reporting -and $Reporting.labelColumns) { @($Reporting.labelColumns | ForEach-Object { [string]$_ }) } else { @('rule', 'task', 'lane') }
+    foreach ($pref in $prefKeys) { $labelKeys.Add($pref) }
     if ($Labels) { foreach ($c in @($Labels.Keys)) { foreach ($k in @($Labels[$c].Keys)) { if ($k -notin $labelKeys) { $labelKeys.Add([string]$k) } } } }
     foreach ($f in $findings) { foreach ($k in @($f.Keys)) { if ($k -notin $engineFields -and $k -notin $labelKeys) { $labelKeys.Add([string]$k) } } }
     $labelsFor = {
@@ -118,8 +121,57 @@ function ConvertTo-GovernancePreflightReport {
     $sanctionedUnused = @($infoLines | ForEach-Object { if ($_ -match '^sanctioned tag not in use at the source \(apply seeds it in the target\): (.+)$') { $Matches[1] } })
 
     # ── document ──────────────────────────────────────────────────────────
+    # Optional YAML frontmatter. A publishing system (engage-system, say) will
+    # not accept a deliverable without it: brand, designation, kind. Emitting it
+    # HERE is what keeps the rendered report a valid deliverable source, so
+    # publishing stays a copy and never becomes an edit — the same reason no
+    # other line of this document is written by hand. A report that has to be
+    # hand-topped before it can ship is a report that goes stale the first time
+    # anyone re-runs the analysis.
+    #
+    # Values come from `sources.yaml reporting.frontmatter:`; {code} and {title}
+    # are substituted so one declaration covers every team. `date` defaults to
+    # the date the DATA was gathered, not today, so re-rendering unchanged data
+    # produces unchanged bytes.
+    $fm = if ($Reporting) { $Reporting.frontmatter } else { $null }
+    if ($fm) {
+        $yamlScalar = {
+            param($v)
+            if ($v -is [bool]) { return $(if ($v) { 'true' } else { 'false' }) }
+            if ($v -is [int] -or $v -is [long] -or $v -is [double] -or $v -is [decimal]) { return [string]$v }
+            $s = ([string]$v).Replace('{code}', $code).Replace('{title}', $title)
+            '"' + $s.Replace('\', '\\').Replace('"', '\"') + '"'
+        }
+        # Ordinal sort, because the YAML reader hands back an unordered map and
+        # PowerShell does not promise a stable enumeration order for one. Authored
+        # order is unrecoverable here, so the alternative to sorting is a document
+        # whose first ten lines shuffle between runs — which would break the
+        # byte-for-byte determinism the rest of this renderer is built on.
+        $fmKeys = [string[]]@($fm.Keys)
+        [array]::Sort($fmKeys, [System.StringComparer]::Ordinal)
+        $L.Add('---')
+        foreach ($k in $fmKeys) { $L.Add("$([string]$k): $(& $yamlScalar $fm[$k])") }
+        if ('date' -notin $fmKeys) {
+            $d = if ($data.gathered -is [datetime]) { ([datetime]$data.gathered).ToUniversalTime().ToString('yyyy-MM-dd', $inv) }
+                 else { $t = [datetime]::MinValue
+                        if ([datetime]::TryParse([string]$data.gathered, $inv, [System.Globalization.DateTimeStyles]::AdjustToUniversal, [ref]$t)) { $t.ToString('yyyy-MM-dd', $inv) } else { '' } }
+            if ($d) { $L.Add("date: $d") }
+        }
+        $L.Add('---')
+        $L.Add('')
+    }
+
     $L.Add("# $code — $title")
     $L.Add('')
+    # Framing notes (preamble, scope note, glossary, observations lead) are
+    # program prose from `reporting:`, maintained by hand there. The engine
+    # renders them verbatim and puts no number in them except {label}/{date}.
+    $gatheredDate = if ($data.gathered -is [datetime]) { ([datetime]$data.gathered).ToUniversalTime().ToString('d MMMM yyyy', $inv) } else { [string]$data.gathered }
+    $prose = { param($s) ([string]$s).Trim().Replace('{code}', $code).Replace('{date}', $gatheredDate).Replace('{label}', [string]$data.scope.label) }
+    if ($Reporting -and $Reporting.preamble) {
+        foreach ($line in ((& $prose $Reporting.preamble) -split "`r?`n")) { $L.Add("> $line".TrimEnd()) }
+        $L.Add('')
+    }
     $head = [System.Collections.Generic.List[object]]::new()
     $head.Add(@('**Team**', "``$code``"))
     $head.Add(@('**Today**', "``$($data.source.org)`` / ``$($data.source.project)`` / ``$srcRoot`` — $(& $n $data.workItems.count) work items"))
@@ -131,18 +183,27 @@ function ConvertTo-GovernancePreflightReport {
     # Never let a reader guess which work items these counts cover. An
     # unscoped run includes archive nobody will migrate, and saying so is the
     # prompt that gets the migration query written.
-    $scopeCell = if ($data.scope -and $data.scope.query) {
+    # The query itself is in the appendix; the cell says what it selects and,
+    # via `reporting.scopeNote`, how that compares with the program's own scope.
+    $hasQuery  = $data.scope -and $data.scope.query
+    $scopeCell = if ($hasQuery) {
         $lbl = [string]$data.scope.label
-        "$(if ($lbl) { "$lbl — " })``$([string]$data.scope.query)``"
+        $s = "$(if ($lbl) { "$lbl " })(query in Appendix A)."
+        if ($Reporting -and $Reporting.scopeNote) { $s += ' ' + (& $prose $Reporting.scopeNote) } else { $s += " Taken on $gatheredDate." }
+        $s
     } else {
         '**every work item under the area, archive included** — no migration query declared'
     }
-    $head.Add(@('**Work items in scope**', $scopeCell))
-    if ($Reporting -and $Reporting.standard) { $head.Add(@('**Standard**', [string]$Reporting.standard)) }
+    $head.Add(@('**Work items checked**', $scopeCell))
+    if ($Reporting -and $Reporting.standard) { $head.Add(@('**Measured against**', [string]$Reporting.standard)) }
     if ($Reporting -and $Reporting.audience) { $head.Add(@('**Audience**', [string]$Reporting.audience)) }
+    # Checks that could not run count in the headline: a gap of zero with two
+    # checks skipped is not a team at the target.
+    $notChecked = @(@{ off = -not $teamsDecl; what = 'source-team' }, @{ off = -not $reposDecl; what = 'repository' } | Where-Object { $_.off })
+    $ncText = if ($notChecked.Count) { ", plus $($notChecked.Count) not checked.** A full readiness picture needs the $(@($notChecked.what) -join ' and ') declaration$(if ($notChecked.Count -gt 1) { 's' }) below." } else { '.**' }
     $result = if ($errors.Count -gt 0) { "**ERROR** — the gather did not complete; see Errors" }
-              elseif ($findings.Count -eq 0) { '**COMPLIANT** — zero findings' }
-              else { "**NOT YET READY** — $(& $n $findings.Count) finding(s) across $($byCheck.Keys.Count) check(s)" }
+              elseif ($findings.Count -eq 0 -and $notChecked.Count -eq 0) { '**Matches the proposed target** — no gaps found' }
+              else { "**Gap to the proposed target: $(& $n $findings.Count) item$(if ($findings.Count -ne 1) { 's' })$ncText" }
     $head.Add(@('**Result**', $result))
     & $table @('', '') $head
 
@@ -155,15 +216,15 @@ function ConvertTo-GovernancePreflightReport {
     # Summary
     $L.Add('## Summary'); $L.Add('')
     $catalogue = @(
-        @{ check = 'area.orphan';            label = 'Area paths not authored in the target';      result = { "$(& $n (& $count 'area.orphan')) of $(& $n $subAreas.Count) sub-areas" } },
-        @{ check = 'area.unmapped';          label = 'Selected source areas without target placement'; result = { "$(& $n $unmappedAreas.Count) area(s)" } },
-        @{ check = 'tag.disallowed';         label = 'Tags: machine-generated families';           result = { if ($families.Count) { "$($families.Count) families, $(& $n $famTags) tags on $(& $n $famItems) work items" } else { 'none' } } },
-        @{ check = 'tag.boardColumn';        label = 'Tags that become board columns';             result = { if ($asColumn.Count) { "$(& $n $asColumn.Count) tags" } else { 'none declared' } } },
-        @{ check = 'tag.retire';             label = 'Tags to retire outright';                    result = { if ($toRetire.Count) { "$(& $n $toRetire.Count) tags" } else { 'none declared' } } },
-        @{ check = 'tag.unsanctioned';       label = 'Tags with no destination decided';           result = { "$(& $n $unsanct.Count) tags" } },
-        @{ check = 'repo.orphan';            label = 'Repositories not authored';                  result = { if (-not $reposDecl) { 'not checked — no repository filter declared' } else { "$(& $n $repoOrph.Count) of $(& $n @($data.repos).Count) repos" } } },
-        @{ check = 'member.unresolvable';    label = 'Authored people the target cannot resolve';  result = { if ($unresolved.Count) { "$(& $n $unresolved.Count) of $(& $n $authoredN)" } else { "pass — $(& $n $authoredN) authored, all resolve" } } },
-        @{ check = 'member.unauthored';      label = 'People in the source team today, not authored'; result = { if (-not $teamsDecl) { 'not checked — no source teams declared' } elseif ($unauth.Count) { "$(& $n $unauth.Count) of $(& $n @($data.population.Keys).Count)" } else { "pass — $(& $n @($data.population.Keys).Count) people, all authored" } } }
+        @{ check = 'area.orphan';            label = 'Area paths not authored in the target';      result = { $c = & $count 'area.orphan'; if ($c) { "$(& $n $c) of $(& $n $subAreas.Count) sub-areas differ" } else { "$(& $n $subAreas.Count) sub-areas — matches" } } },
+        @{ check = 'area.unmapped';          label = 'Selected source areas without target placement'; result = { if ($unmappedAreas.Count) { "$(& $n $unmappedAreas.Count) area$(if ($unmappedAreas.Count -ne 1) { 's' }) differ" } else { '0 areas — matches' } } },
+        @{ check = 'tag.disallowed';         label = 'Tags: machine-generated families';           result = { if ($families.Count) { "$($families.Count) families, $(& $n $famTags) tags on $(& $n $famItems) work items" } else { 'none — matches' } } },
+        @{ check = 'tag.boardColumn';        label = 'Tags that become board columns';             result = { if ($asColumn.Count) { "$(& $n $asColumn.Count) tags" } else { 'none declared yet' } } },
+        @{ check = 'tag.retire';             label = 'Tags to retire outright';                    result = { if ($toRetire.Count) { "$(& $n $toRetire.Count) tags" } else { 'none declared yet' } } },
+        @{ check = 'tag.unsanctioned';       label = 'Tags with no destination decided';           result = { if ($unsanct.Count) { "$(& $n $unsanct.Count) tags" } else { 'none — matches' } } },
+        @{ check = 'repo.orphan';            label = 'Repositories not authored';                  result = { if (-not $reposDecl) { 'not checked — no repository filter declared' } elseif ($repoOrph.Count) { "$(& $n $repoOrph.Count) of $(& $n @($data.repos).Count) repos differ" } else { "matches — $(& $n @($data.repos).Count) repos, all authored" } } },
+        @{ check = 'member.unresolvable';    label = 'Authored people the target cannot resolve';  result = { if ($unresolved.Count) { "$(& $n $unresolved.Count) of $(& $n $authoredN) differ" } elseif ($authoredN -eq 1) { 'matches — 1 authored, resolves' } else { "matches — $(& $n $authoredN) authored, all resolve" } } },
+        @{ check = 'member.unauthored';      label = 'People in the source team today, not authored'; result = { if (-not $teamsDecl) { 'not checked — no source teams declared' } elseif ($unauth.Count) { "$(& $n $unauth.Count) of $(& $n @($data.population.Keys).Count) differ" } else { "matches — $(& $n @($data.population.Keys).Count) people, all authored" } } }
     )
     $hdr = @('Check', 'Result') + @($usedLabelKeys | ForEach-Object { & $titleCase $_ })
     # Rows are emitted with a leading comma throughout this function: a bare
@@ -174,10 +235,15 @@ function ConvertTo-GovernancePreflightReport {
         , (@($c.label, (& $c.result)) + @($usedLabelKeys | ForEach-Object { if ($lab.Contains($_)) { $lab[$_] } else { '' } }))
     }
     & $table $hdr @($rows)
+    if ($Reporting -and $Reporting.glossary) { $L.Add((& $prose $Reporting.glossary)); $L.Add('') }
+    if ($notChecked.Count) {
+        $decl = @(if (-not $teamsDecl) { "the team's source team(s)" }; if (-not $reposDecl) { 'its repository filter' })
+        $L.Add("To run the check$(if ($notChecked.Count -gt 1) { 's' }) marked ""not checked"", declare $($decl -join ' and ')."); $L.Add('')
+    }
 
     # 1. Area paths
     $L.Add("## 1. Area paths that fold to tags — $(& $n (& $count 'area.orphan')) of $(& $n $subAreas.Count) sub-areas"); $L.Add('')
-    $L.Add('An area path in the target means one thing: who answers for the work. A sub-area that is authored has a node to land on and survives the move; one that is not folds — to a tag, or to nothing. Work items are those sitting directly on each path.'); $L.Add('')
+    $L.Add('In the proposed target, an area path means one thing: who answers for the work. A sub-area that is authored has a node to land on; one that is not folds — to a tag, or to nothing. Work items are those sitting directly on each path.'); $L.Add('')
     $areaRows = foreach ($a in ($areas | Sort-Object { -[long]$_.workItems }, { [string]$_.source })) {
         $src = [string]$a.source
         $st  = if ($src -eq $srcRoot)            { 'the team root' }
@@ -192,25 +258,30 @@ function ConvertTo-GovernancePreflightReport {
 
     # 2. Tags
     $L.Add("## 2. Tags — $(& $n @($data.tags.Keys).Count) distinct tags in use"); $L.Add('')
-    $L.Add('### 2a. Machine-generated families'); $L.Add('')
+    # Sub-sections are lettered as they appear, so an empty one leaves no gap.
+    $sub = [ref][int][char]'a'
+    $next = { $c = [char]$sub.Value; $sub.Value++; "2$c" }
+    $L.Add("### $(& $next). Machine-generated families"); $L.Add('')
     if ($families.Count -eq 0) { $L.Add('None matched a disallowed pattern.'); $L.Add('') }
     else {
-        $L.Add('Each row is one disallowed pattern. These are reported as families because no one applied them by hand, and they are removed as families.'); $L.Add('')
-        $famRows = foreach ($f in ($families | Sort-Object { -[long]$_.tags })) { , @("``$($f.subject)``", (& $n $f.tags), (& $n $f.workItems), (@($f.examples | Select-Object -First 3) -join ', ')) }
+        $L.Add('Each row is one disallowed pattern. These are reported as families because no one applied them by hand, and the programme removes them as families.'); $L.Add('')
+        # @() keeps a single family as one row; a bare assignment unrolls it into cells.
+        $famRows = @(foreach ($f in ($families | Sort-Object { -[long]$_.tags })) { , @("``$($f.subject)``", (& $n $f.tags), (& $n $f.workItems), (@($f.examples | Select-Object -First 3) -join ', ')) })
         & $table @('Pattern', 'Distinct tags', 'Work items', 'Examples') @($famRows)
     }
     if ($asColumn.Count -gt 0) {
-        $L.Add("### 2b. Tags that become board columns — $(& $n $asColumn.Count)"); $L.Add('')
+        $L.Add("### $(& $next). Tags that become board columns — $(& $n $asColumn.Count)"); $L.Add('')
         $L.Add('These name where work has got to, not what it is. A board column carries that, and the tag stops being applied once the column exists — so this is a board change, not a vocabulary decision.'); $L.Add('')
         & $table @('Uses', 'Tag') @(foreach ($t in ($asColumn | Sort-Object { -[long]$_.workItems }, { [string]$_.subject })) { , @((& $n $t.workItems), $t.subject) })
     }
     if ($toRetire.Count -gt 0) {
-        $L.Add("### 2c. Tags to retire outright — $(& $n $toRetire.Count)"); $L.Add('')
+        $L.Add("### $(& $next). Tags to retire outright — $(& $n $toRetire.Count)"); $L.Add('')
         $L.Add('Declared for removal with no replacement. Nothing depends on them.'); $L.Add('')
         & $table @('Uses', 'Tag') @(foreach ($t in ($toRetire | Sort-Object { -[long]$_.workItems }, { [string]$_.subject })) { , @((& $n $t.workItems), $t.subject) })
     }
-    $L.Add("### 2d. Tags with no destination decided — $(& $n $unsanct.Count)"); $L.Add('')
-    $L.Add('Each of these needs one of three answers: **sanction** it into the vocabulary, make it a **board column**, or **retire** it. Anything still undecided at migration is an exception in the target from day one.'); $L.Add('')
+    $L.Add("### $(& $next). Tags with no destination decided — $(& $n $unsanct.Count)"); $L.Add('')
+    $none = if ($asColumn.Count -eq 0 -and $toRetire.Count -eq 0) { ' No tags have yet been declared as board columns or for retirement.' } else { '' }
+    $L.Add("Each of these needs one of three answers: **sanction** it into the vocabulary, make it a **board column**, or **retire** it. Anything still undecided at migration shows up on the target's audit from day one, so it is worth deciding first.$none"); $L.Add('')
     if ($unsanct.Count -gt 0) {
         $buckets = [ordered]@{ '1 work item' = 0; '2 to 5' = 0; '6 to 20' = 0; '21 to 50' = 0; 'more than 50' = 0 }
         foreach ($t in $unsanct) {
@@ -220,7 +291,7 @@ function ConvertTo-GovernancePreflightReport {
         }
         & $table @('Used on', 'Distinct tags') @(foreach ($k in $buckets.Keys) { , @($k, (& $n $buckets[$k])) })
         $cands = @($unsanct | Where-Object { [long]$_.workItems -gt $threshold } | Sort-Object { -[long]$_.workItems }, { [string]$_.subject })
-        $L.Add("Tags used on more than $(& $n $threshold) work items — decide these first ($(& $n $cands.Count)):"); $L.Add('')
+        $L.Add("Tags used on more than $(& $n $threshold) work items — we suggest deciding these first ($(& $n $cands.Count)):"); $L.Add('')
         if ($cands.Count -gt 0) { & $table @('Uses', 'Tag') @(foreach ($t in $cands) { , @((& $n $t.workItems), $t.subject) }) }
         else { $L.Add('None.'); $L.Add('') }
     }
@@ -231,7 +302,10 @@ function ConvertTo-GovernancePreflightReport {
 
     # 3. People
     $L.Add('## 3. People'); $L.Add('')
-    if ($unresolved.Count -eq 0) { $L.Add("All $(& $n $authoredN) authored people and team admins resolve in the target organisation.") }
+    if ($unresolved.Count -eq 0) {
+        if ($authoredN -eq 1) { $L.Add('The 1 authored person (including team admins) resolves in the target organisation.') }
+        else { $L.Add("All $(& $n $authoredN) authored people (including team admins) resolve in the target organisation.") }
+    }
     else {
         $L.Add("$(& $n $unresolved.Count) authored entries do not resolve in the target organisation:"); $L.Add('')
         & $table @('UPN', 'Where', 'Did you mean') @(foreach ($u in $unresolved) { , @($u.subject, $(if ($u.group) { $u.group } else { $u.team }), (@($u.suggestions) -join ', ')) })
@@ -259,12 +333,18 @@ function ConvertTo-GovernancePreflightReport {
     $iters = @($data.iterations.Keys | Sort-Object { -[long]$data.iterations[$_] }, { $_ } | Select-Object -First $iterTop)
     if ($iters.Count -gt 0) {
         $L.Add("## 5. Iteration paths in use — top $(& $n $iters.Count) of $(& $n @($data.iterations.Keys).Count)"); $L.Add('')
-        $L.Add('Context for the migration mapping, not a finding.'); $L.Add('')
-        & $table @('Work items', 'Iteration path') @(foreach ($i in $iters) { , @((& $n $data.iterations[$i]), $i) })
+        $L.Add('Context for the migration mapping, not a gap.'); $L.Add('')
+        # Backticked like every other path in this document. Not cosmetic: an
+    # iteration path is full of backslashes, and a bare `Petrel\2026\S2\W6` in a
+    # markdown table becomes `\S2` and `\W6` — undefined control sequences — the
+    # moment anyone renders this to PDF through pandoc/LaTeX. Code spans pass
+    # through verbatim.
+    & $table @('Work items', 'Iteration path') @(foreach ($i in $iters) { , @((& $n $data.iterations[$i]), "``$i``") })
     }
 
     # 6. Observations (the only section anyone other than this function writes)
     $L.Add('## 6. Observations'); $L.Add('')
+    if ($Reporting -and $Reporting.observationsLead) { $L.Add((& $prose $Reporting.observationsLead)); $L.Add('') }
     $L.Add('<!-- observations:begin -->')
     # Observations comment on a specific analysis. If the findings have been
     # regenerated since the fragment was written, the commentary may contradict
@@ -287,23 +367,27 @@ function ConvertTo-GovernancePreflightReport {
     $L.Add('<!-- observations:end -->')
     $L.Add('')
 
-    # 7. Returns
-    $L.Add('## 7. What this team owes'); $L.Add('')
-    $owed = [System.Collections.Generic.List[string]]::new()
-    foreach ($c in $catalogue) {
-        $hits = & $count $c.check
-        if ($c.check -eq 'member.unresolvable') { $hits += & $count 'teamAdmin.unresolvable' }
-        if ($hits -eq 0) { continue }
-        $lab = & $labelsFor $c.check
-        $tag = @(); if ($lab.Contains('task')) { $tag += "Task $($lab['task'])" }; if ($lab.Contains('rule')) { $tag += "rule $($lab['rule'])" }; if ($lab.Contains('lane')) { $tag += $lab['lane'] }
-        $owed.Add("- **$($c.label)** — $(& $n $hits)$(if ($tag.Count) { ' · ' + ($tag -join ' · ') })")
+    # The per-check "what this team owes" list was dropped: it repeated the
+    # Summary table row for row, with the same labels.
+
+    # Appendix A. The exact selection and patterns, so the tables above can be
+    # reproduced. Kept out of the header because a WIQL block is not a sentence.
+    if ($hasQuery -or $families.Count -gt 0) {
+        $L.Add('## Appendix A — Query and tag patterns'); $L.Add('')
+        if ($hasQuery) {
+            $L.Add("**Query (WIQL)** used for this check, as run on $($gatheredDate):"); $L.Add('')
+            $L.Add('```sql')
+            foreach ($line in (([string]$data.scope.query).Trim() -split "`r?`n")) { $L.Add($line.TrimEnd()) }
+            $L.Add('```'); $L.Add('')
+        }
+        if ($families.Count -gt 0) {
+            $L.Add('**Machine-generated tag patterns:**'); $L.Add('')
+            & $table @('Pattern') @(foreach ($f in ($families | Sort-Object { -[long]$_.tags })) { , @("``$($f.subject)``") })
+        }
     }
-    if (-not $teamsDecl) { $owed.Add('- **Declare the source team(s)** so the missing-people check can run') }
-    if (-not $reposDecl) { $owed.Add('- **Declare the repository filter** so the naming check can run') }
-    if ($owed.Count -eq 0) { $L.Add('Nothing. This team is at the bar.') } else { foreach ($o in $owed) { $L.Add($o) } }
-    $L.Add('')
+
     $L.Add('---')
-    $L.Add("_Rendered by NKDAgility.AzureDevOps.Governance from ``$(Split-Path -Leaf $DataPath)`` and ``$(Split-Path -Leaf $FindingsPath)``. Every number above is copied from those files; the Observations section is the only prose written by anyone else._")
+    $L.Add("_Rendered by NKDAgility.AzureDevOps.Governance from ``$(Split-Path -Leaf $DataPath)`` and ``$(Split-Path -Leaf $FindingsPath)``. Every number above is copied from those files; the framing notes are maintained by hand in the program's reporting settings, and they and the Observations section are the only prose written by anyone else._")
     $L.Add('')
 
     $outDir = [System.IO.Path]::GetDirectoryName($OutputPath)

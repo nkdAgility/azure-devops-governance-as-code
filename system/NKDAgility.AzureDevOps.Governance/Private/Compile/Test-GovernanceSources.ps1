@@ -51,6 +51,13 @@ function Test-GovernanceSources {
                                        # are listed as vocabulary candidates
             iterationTop:        7     # iteration paths shown for migration context
             title:               "Pre-migration readiness check"
+            labelColumns:        [rule, task, lane]  # Summary label columns, in order
+            # Framing prose, maintained by hand and rendered verbatim.
+            # {code}, {date} (data gathered) and {label} (scope label) are filled in.
+            preamble:            "blockquote above the header table"
+            scopeNote:           "appended to the 'Work items checked' cell"
+            glossary:            "paragraph under the Summary table"
+            observationsLead:    "line above the Observations fragment"
     #>
     [CmdletBinding()]
     param(
@@ -90,9 +97,27 @@ function Test-GovernanceSources {
         if ($Reporting -isnot [System.Collections.IDictionary]) {
             $issues += "sources.yaml reporting must be a map"
         } else {
-            $known = @('standard', 'audience', 'candidateTagMinUses', 'iterationTop', 'title')
+            $known = @('standard', 'audience', 'candidateTagMinUses', 'iterationTop', 'title', 'frontmatter',
+                       'preamble', 'scopeNote', 'glossary', 'observationsLead', 'labelColumns')
             foreach ($k in @($Reporting.Keys)) {
                 if ($k -notin $known) { $issues += "sources.yaml reporting '$k' is not a reporting field. Known: $($known -join ', ')" }
+            }
+            # frontmatter is deliberately open: its keys belong to whatever
+            # publishing system consumes the report, not to this engine. Only
+            # the shape is checked — a map of scalars. A nested structure would
+            # be emitted as a bare .ToString() and silently corrupt the YAML.
+            if ($Reporting.Contains('frontmatter')) {
+                $fm = $Reporting['frontmatter']
+                if ($fm -isnot [System.Collections.IDictionary]) {
+                    $issues += "sources.yaml reporting frontmatter must be a map of scalar values"
+                } else {
+                    foreach ($k in @($fm.Keys)) {
+                        $v = $fm[$k]
+                        if ($v -is [System.Collections.IDictionary] -or ($v -is [System.Collections.IEnumerable] -and $v -isnot [string])) {
+                            $issues += "sources.yaml reporting frontmatter '$k' must be a scalar, not a list or map"
+                        }
+                    }
+                }
             }
             foreach ($k in 'candidateTagMinUses', 'iterationTop') {
                 if ($Reporting.Contains($k)) {
@@ -100,8 +125,14 @@ function Test-GovernanceSources {
                     if (-not ($v -is [int] -or $v -is [long]) -or [long]$v -lt 1) { $issues += "sources.yaml reporting '$k' must be a positive integer, got '$v'" }
                 }
             }
-            foreach ($k in 'standard', 'audience', 'title') {
+            foreach ($k in 'standard', 'audience', 'title', 'preamble', 'scopeNote', 'glossary', 'observationsLead') {
                 if ($Reporting.Contains($k) -and $Reporting[$k] -isnot [string]) { $issues += "sources.yaml reporting '$k' must be a string" }
+            }
+            if ($Reporting.Contains('labelColumns')) {
+                $lc = $Reporting['labelColumns']
+                if ($lc -is [string] -or $lc -isnot [System.Collections.IEnumerable] -or @($lc | Where-Object { $_ -isnot [string] }).Count) {
+                    $issues += "sources.yaml reporting labelColumns must be a list of label names"
+                }
             }
         }
     }

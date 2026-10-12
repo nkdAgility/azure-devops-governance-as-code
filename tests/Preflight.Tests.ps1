@@ -494,17 +494,39 @@ Describe 'ConvertTo-GovernancePreflightReport' {
         $md | Should -Match ([regex]::Escape('| 4 | `\LegacyPortal\Foundation\Plotting` | folds — not authored |'))
         $md | Should -Match ([regex]::Escape('| 3 | `\LegacyPortal\Foundation\Inbox` | authored as `\Odyssey\Portal\Platform\Foundation\Inbox` |'))
         $md | Should -Match ([regex]::Escape('| 5 | `\LegacyPortal\Foundation` | the team root |'))
-        $md | Should -Match '\| Area paths not authored in the target \| 1 of 2 sub-areas \| A2 \| 2 \| PM \|'
-        $md | Should -Match 'Selected source areas without target placement \| 0 area\(s\)'
+        $md | Should -Match '\| Area paths not authored in the target \| 1 of 2 sub-areas differ \| A2 \| 2 \| PM \|'
+        $md | Should -Match 'Selected source areas without target placement \| 0 areas — matches'
         $md | Should -Match '1 families, 2 tags on 4 work items'
+        # one family is still one row, not four one-cell rows
+        $md | Should -Match '\| `\^P\\d\{4\}\(_\\d\+\)\*-I\\d\+` \| 2 \| 4 \| '
+        $md | Should -Match '\*\*Gap to the proposed target: 6 items\.\*\*'
         $md | Should -Match 'more than 5 work items'
         $md | Should -Match '\| 7 \| Rogue \|'
         $md | Should -Match 'Fixture Standard'
         $md | Should -Match 'Sanctioned tags not yet in use here.*Triage'
-        $md | Should -Match 'Repositories not authored \| 1 of 1 repos'
+        $md | Should -Match 'Repositories not authored \| 1 of 1 repos differ'
         $md | Should -Match '1 people work here today and are not authored'
         $md | Should -Match '_No observations were generated for this report\._'
-        $md | Should -Match '- \*\*Area paths not authored in the target\*\* — 1 · Task 2 · rule A2 · PM'
+        $md | Should -Not -Match 'What this team owes'
+    }
+
+    It 'renders the program framing notes verbatim, in labelColumns order, and counts unchecked checks in the headline' {
+        $d = Get-Content $script:renderData -Raw | ConvertFrom-Json -AsHashtable -Depth 20
+        $d['source']['teams'] = @(); $d['source']['repoInclude'] = $null
+        $d['scope'] = [ordered]@{ query = "SELECT [System.Id] FROM WorkItems WHERE [System.State] <> 'Closed'"; label = 'Open work' }
+        $framed = Join-Path $script:renderDir 'framed-data.json'
+        $d | ConvertTo-Json -Depth 20 | Set-Content $framed -Encoding utf8
+        $md = Get-Content (ConvertTo-GovernancePreflightReport -DataPath $framed -FindingsPath $script:renderFind -Reporting @{
+            preamble = "**A proposal.**`nPush back."; scopeNote = 'Wider than scope, taken on {date}.'
+            glossary = 'Gloss for {code}.'; observationsLead = 'Suggestions only.'; labelColumns = @('lane', 'rule')
+        }) -Raw
+        $md | Should -Match '(?m)^> \*\*A proposal\.\*\*\n> Push back\.$'
+        $md | Should -Match ([regex]::Escape('| **Work items checked** | Open work (query in Appendix A). Wider than scope, taken on 4 September 2026. |'))
+        $md | Should -Match 'plus 2 not checked\.\*\* A full readiness picture needs the source-team and repository declarations below\.'
+        $md | Should -Match '\| Check \| Result \| Lane \| Rule \|'
+        $md | Should -Match '(?m)^Gloss for PTL-FND\.$'
+        $md | Should -Match "Suggestions only\.\n\n<!-- observations:begin -->"
+        $md | Should -Match '(?s)## Appendix A — Query and tag patterns.*```sql\nSELECT \[System\.Id\] FROM WorkItems'
     }
 
     It 'is byte-identical on a second run' {
@@ -521,7 +543,7 @@ Describe 'ConvertTo-GovernancePreflightReport' {
         $d | ConvertTo-Json -Depth 20 | Set-Content $outsideData -Encoding utf8
         $md = Get-Content (ConvertTo-GovernancePreflightReport -DataPath $outsideData -FindingsPath $script:renderFind) -Raw
         $md | Should -Match ([regex]::Escape('| 2 | `\LegacyPortal\Platform` | outside source root — target placement required |'))
-        $md | Should -Match 'Selected source areas without target placement \| 1 area\(s\)'
+        $md | Should -Match 'Selected source areas without target placement \| 1 area differ'
     }
 
     It 'splices an observations fragment between the markers and leaves every table byte unchanged' {
@@ -538,14 +560,15 @@ Describe 'ConvertTo-GovernancePreflightReport' {
 
     It 'names the migration query in the header, and says so loudly when there is none' {
         $unscoped = Get-Content (ConvertTo-GovernancePreflightReport -DataPath $script:renderData -FindingsPath $script:renderFind) -Raw
-        $unscoped | Should -Match '\*\*Work items in scope\*\* \| \*\*every work item under the area, archive included\*\* — no migration query declared'
+        $unscoped | Should -Match '\*\*Work items checked\*\* \| \*\*every work item under the area, archive included\*\* — no migration query declared'
 
         $scopedData = Join-Path $script:renderDir 'scoped-data.json'
         $d = Get-Content $script:renderData -Raw | ConvertFrom-Json -AsHashtable -Depth 20
         $d['scope'] = [ordered]@{ query = "SELECT [System.Id] FROM WorkItems WHERE [System.IterationPath] NOT UNDER 'X\ARCHIVE'"; label = '2026.1 onwards' }
         $d | ConvertTo-Json -Depth 20 | Set-Content $scopedData -Encoding utf8
         $scoped = Get-Content (ConvertTo-GovernancePreflightReport -DataPath $scopedData -FindingsPath $script:renderFind) -Raw
-        $scoped | Should -Match '2026\.1 onwards — `SELECT \[System\.Id\] FROM WorkItems WHERE'
+        $scoped | Should -Match '2026\.1 onwards \(query in Appendix A\)\.'
+        $scoped | Should -Match '(?s)```sql\nSELECT \[System\.Id\] FROM WorkItems WHERE'
         $scoped | Should -Not -Match 'no migration query declared'
     }
 
