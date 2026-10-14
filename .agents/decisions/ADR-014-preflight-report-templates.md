@@ -28,8 +28,12 @@ first time it was edited.
 2. **Markers in the document, wording in the slots file.** The document carries
    HTML-comment markers, invisible when it is published on its own:
    `team:replace NAME … team:end` (a region replaced), `team:slot NAME` (inline
-   or whole lines) and `team:column HEADER SEPARATOR ROWPREFIX` (a column added
-   to the table that follows). The slots file says, per marker, what to write.
+   or whole lines), `team:check NAME` (at the end of a checklist item: the slot
+   sets the box and adds the team's detail), `team:fill COLUMN ROWPREFIX` (a
+   cell of each row in the table that follows) and
+   `team:column HEADER SEPARATOR ROWPREFIX` (a column added to that table).
+   The intent is an integrated document: the team's position lives in the
+   document's own checklists and tables, not beside them. The slots file says, per marker, what to write.
    The document's authors never see placeholder syntax.
 
 3. **A deliberately small placeholder language** (`Expand-GovernanceTemplate`):
