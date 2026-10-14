@@ -98,9 +98,24 @@ function Test-GovernanceSources {
             $issues += "sources.yaml reporting must be a map"
         } else {
             $known = @('standard', 'audience', 'candidateTagMinUses', 'iterationTop', 'title', 'frontmatter',
-                       'preamble', 'scopeNote', 'glossary', 'observationsLead', 'labelColumns')
+                       'preamble', 'scopeNote', 'glossary', 'observationsLead', 'labelColumns', 'template')
             foreach ($k in @($Reporting.Keys)) {
                 if ($k -notin $known) { $issues += "sources.yaml reporting '$k' is not a reporting field. Known: $($known -join ', ')" }
+            }
+            # template (ADR-014): render from the program's own document instead
+            # of the fixed layout. document and slots are required paths,
+            # relative to the program folder; assetPrefix is optional.
+            if ($Reporting.Contains('template')) {
+                $tp = $Reporting['template']
+                if ($tp -isnot [System.Collections.IDictionary]) {
+                    $issues += "sources.yaml reporting template must be a map with 'document' and 'slots'"
+                } else {
+                    foreach ($k in @($tp.Keys)) {
+                        if ($k -notin 'document', 'slots', 'assetPrefix') { $issues += "sources.yaml reporting template '$k' is not a template field. Known: document, slots, assetPrefix" }
+                        elseif ($tp[$k] -isnot [string] -or [string]::IsNullOrWhiteSpace($tp[$k])) { $issues += "sources.yaml reporting template '$k' must be a non-empty string" }
+                    }
+                    foreach ($k in 'document', 'slots') { if (-not $tp.Contains($k)) { $issues += "sources.yaml reporting template is missing '$k'" } }
+                }
             }
             # frontmatter is deliberately open: its keys belong to whatever
             # publishing system consumes the report, not to this engine. Only

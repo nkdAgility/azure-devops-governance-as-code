@@ -37,9 +37,20 @@ function Invoke-GovernancePreflightReport {
             Write-Host "  [skip]    $c — not gathered yet (missing $($missing -join ', ') under $($paths.Dir)); run preflight first" -ForegroundColor DarkYellow
             continue
         }
-        $out = ConvertTo-GovernancePreflightReport -DataPath $paths.Data -FindingsPath $paths.FindingsJson `
-            -ObservationsPath $paths.Observations -OutputPath $paths.Report `
-            -Labels $source.SourceLabels -Reporting $source.SourceReporting
+        $tpl = if ($source.SourceReporting) { $source.SourceReporting.template } else { $null }
+        $out = if ($tpl) {
+            # ADR-014: the program's own document, filled with this team's facts.
+            # Paths in reporting.template are relative to the program folder.
+            $resolve = { param($p) if ([System.IO.Path]::IsPathRooted($p)) { $p } else { [System.IO.Path]::GetFullPath((Join-Path $ProgramPath $p)) } }
+            ConvertTo-GovernancePreflightTemplateReport -DataPath $paths.Data -FindingsPath $paths.FindingsJson `
+                -DocumentPath (& $resolve $tpl.document) -SlotsPath (& $resolve $tpl.slots) `
+                -NotesPath $paths.Observations -OutputPath $paths.Report `
+                -AssetPrefix ([string]$tpl.assetPrefix) -Source $source.Sources[$c] -Reporting $source.SourceReporting
+        } else {
+            ConvertTo-GovernancePreflightReport -DataPath $paths.Data -FindingsPath $paths.FindingsJson `
+                -ObservationsPath $paths.Observations -OutputPath $paths.Report `
+                -Labels $source.SourceLabels -Reporting $source.SourceReporting
+        }
         $withObs = Test-Path -LiteralPath $paths.Observations
         Write-Host "  [ok]      $c — $out$(if ($withObs) { ' (with observations)' } else { ' (no observations yet)' })" -ForegroundColor Green
         $rendered.Add($out)
