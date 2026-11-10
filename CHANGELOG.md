@@ -19,6 +19,13 @@ previously left alone, without a line of consumer code changing.
 
 ### Added
 
+- **Work item access on area paths**, opt-in through `access.yaml
+  workItemAccess: { grantAt: team | product }`. Each team group gets its role's
+  `boards:` permission (`read` 17, `contribute`/`edit-requirements`/`manage` 753
+  in the CSS namespace) on its own area or on the product node. Additive,
+  minimum-bits check, nothing removed. Without the block nothing changes;
+  `roles.*.boards` was previously read by nothing.
+
 - **A program declares the Azure CLI context it runs in** (ADR-012), through an
   optional `manifest.yaml azure:` block — `profile`, `tenant`, `subscription`,
   `signInAs`. `az login` is global to the user, so a customer sign-in and every

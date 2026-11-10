@@ -1141,6 +1141,62 @@ function Invoke-GovernanceReconcile {
         }
     }
 
+    # ── 6c. Work item access on area paths (access.yaml workItemAccess:) ─────
+    # Each team group must hold at least its role's boards bits on the node the
+    # compiler chose (team area, or product node). Minimum-bits check, merge
+    # grant, nothing removed — the same contract as folder ACLs.
+    $workItemEntries = @($Resolved.areaWorkItemAccess | Where-Object { $_ })
+    if ($workItemEntries.Count -gt 0) {
+        Write-Host "`n--- Work item access (area paths) ---" -ForegroundColor Cyan
+
+        $wiIdentity = @{}   # subjectDescriptor -> securityIdentityDescriptor
+        $wiTokens   = @{}   # area path -> CSS token
+        foreach ($entry in $workItemEntries) {
+            $subjectDesc = $liveGroups[$entry.group]
+            if (-not $subjectDesc) { continue }   # group missing — flagged in the groups section
+            $path = [string]$entry.path
+            if (-not $liveAreas.ContainsKey($path)) { continue }   # area missing — already flagged
+
+            if (-not $wiIdentity.ContainsKey($subjectDesc)) {
+                $wiIdentity[$subjectDesc] = Get-AdoGroupIdentityDescriptor -OrgUrl $OrgUrl -SubjectDescriptor $subjectDesc
+            }
+            $identityDesc = $wiIdentity[$subjectDesc]
+            if (-not $identityDesc) {
+                $findings.Add("DRIFT work item access: cannot resolve security identity for '$($entry.group)'")
+                & $rError "work item access: identity for '$($entry.group)'"
+                continue
+            }
+
+            $need = ConvertTo-AreaWorkItemPermissionBit -Permission $entry.permission
+            try {
+                if (-not $wiTokens.ContainsKey($path)) {
+                    $wiTokens[$path] = Get-AdoAreaNodeToken -OrgUrl $OrgUrl -Project $project -ResolvedPath $path
+                }
+                $token  = $wiTokens[$path]
+                $acl    = Get-AdoAreaNodeAcl -OrgUrl $OrgUrl -Token $token
+                $actual = if ($acl.ContainsKey($identityDesc)) { [int]$acl[$identityDesc] } else { 0 }
+                if (($actual -band $need) -eq $need) {
+                    & $rOk "work items: $($entry.group) $($entry.permission) on $path"
+                } elseif ($doFix) {
+                    try {
+                        Set-AdoAreaNodeAce -OrgUrl $OrgUrl -Token $token -IdentityDescriptor $identityDesc -AllowBits $need
+                        & $rFixed "work items: $($entry.group) $($entry.permission) on $path"
+                    } catch {
+                        $findings.Add("ERROR granting work item access to '$($entry.group)' on '$path': $_")
+                        & $rError "grant work item access '$($entry.group)' on '$path': $_"
+                    }
+                } else {
+                    $findings.Add("DRIFT work item access: '$($entry.group)' lacks $($entry.permission) on '$path' (allow=$actual, need $need)")
+                    if ($Mode -eq 'WhatIf') { & $rWould "grant $($entry.permission) on work items to $($entry.group) on $path" }
+                    else                     { & $rDrift "work items: $($entry.group) $($entry.permission) on $path" }
+                }
+            } catch {
+                $findings.Add("ERROR reading node ACL for '$path': $_")
+                & $rError "node ACL for '$path': $_"
+            }
+        }
+    }
+
     # ── 7. Tags — governed taxonomy (Decision-0041, ADR-006) ──────────────────
     # Disallowed patterns (build-id shaped) are ALWAYS drift; tags outside the
     # sanctioned vocabulary are audit exceptions; sanctioned tags that do not

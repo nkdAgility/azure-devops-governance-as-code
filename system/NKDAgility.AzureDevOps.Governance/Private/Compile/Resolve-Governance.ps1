@@ -235,6 +235,14 @@ function Add-NodeRepos {
 # mapped at reconcile time by ConvertTo-QueryFolderPermissionBit.
 $script:QueryFolderPermissionNames = @('read', 'contribute', 'manage')
 
+# Permission names accepted by access.yaml `roles.<role>.boards` once
+# `workItemAccess:` is declared. Bits are mapped at reconcile time by
+# ConvertTo-AreaWorkItemPermissionBit. Where they are granted is
+# `workItemAccess.grantAt`: 'team' (the team's own area) or 'product' (the
+# product node, so every team's groups reach the whole product).
+$script:AreaWorkItemPermissionNames = @('read', 'contribute', 'edit-requirements', 'manage')
+$script:AreaWorkItemGrantAtNames    = @('team', 'product')
+
 function ConvertTo-SharedQueryFolderPath {
     <# '\Portal\Platform\Foundation' -> 'Shared Queries/Portal/Platform/Foundation' #>
     [CmdletBinding()]
@@ -652,6 +660,50 @@ function Resolve-Governance {
         })
     }
 
+    # Work item access on area paths. Opt-in: without an access.yaml
+    # `workItemAccess:` block nothing is emitted and the project's default
+    # groups decide, as before. With it, each team group gets its role's
+    # `boards:` permission on one area node — the team's own area
+    # (grantAt: team) or the product node above it (grantAt: product), so a
+    # programme can be open across its domains while peer products stay out.
+    # Grants are additive (minimum bits); nothing is removed.
+    $areaAccess = [System.Collections.Generic.List[object]]::new()
+    if ($Access.workItemAccess) {
+        $grantAt = if ($Access.workItemAccess.grantAt) { [string]$Access.workItemAccess.grantAt } else { 'team' }
+        if ($grantAt -notin $script:AreaWorkItemGrantAtNames) {
+            throw "access.yaml: workItemAccess.grantAt '$grantAt' is not valid (expected one of: $($script:AreaWorkItemGrantAtNames -join ', '))."
+        }
+        $productPathByCode = @{}
+        foreach ($team in $ctx.Teams) {
+            if ($team.kind -eq 'product' -and $team.codePath) { $productPathByCode[[string]$team.codePath] = $team.defaultAreaPath }
+        }
+        $seenGrant = @{}
+        foreach ($team in $ctx.Teams) {
+            if ($team.scope -eq 'future') { continue }
+            if (-not $team.codePath) { continue }
+            $grantPath = if ($grantAt -eq 'product') { $productPathByCode[([string]$team.codePath -split '-')[0]] }
+                         else { $team.defaultAreaPath }
+            if (-not $grantPath) { continue }   # the program root sits above every product
+            foreach ($group in $team.securityGroups) {
+                $roleDef = $Access.roles[[string]$group.role]
+                $permission = if ($roleDef) { $roleDef.boards } else { $null }
+                if (-not $permission) { continue }
+                if ([string]$permission -notin $script:AreaWorkItemPermissionNames) {
+                    throw "access.yaml: role '$($group.role)' has unknown boards permission '$permission' (expected one of: $($script:AreaWorkItemPermissionNames -join ', '))."
+                }
+                $grantKey = "$($group.ado)|$grantPath"
+                if ($seenGrant.ContainsKey($grantKey)) { continue }
+                $seenGrant[$grantKey] = $true
+                $areaAccess.Add([ordered]@{
+                    group      = $group.ado
+                    permission = [string]$permission
+                    path       = $grantPath
+                    team       = $team.name
+                })
+            }
+        }
+    }
+
     # Project identity: manifest project block with defaults. name defaults to
     # the program name; process/visibility/sourceControl only apply at creation.
     $projectSpec = $Manifest.project
@@ -674,6 +726,7 @@ function Resolve-Governance {
         pipelineFolders = $ctx.PipelineFolders
         queryFolders    = $ctx.QueryFolders
         structuralAuthority = $authority
+        areaWorkItemAccess  = $areaAccess
         stakeholders    = [ordered]@{
             accessLevel = $Access.stakeholders.accessLevel
             ado         = $Access.stakeholders.ado

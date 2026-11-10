@@ -248,6 +248,60 @@ Describe 'Compile stage' {
         }
     }
 
+    It 'emits no work item access unless access.yaml declares workItemAccess' {
+        @($script:resolved.areaWorkItemAccess | Where-Object { $_ }).Count | Should -Be 0
+    }
+
+    It 'grants each team group its boards permission on the product node with grantAt: product' {
+        InModuleScope NKDAgility.AzureDevOps.Governance {
+            $section = @{ name = 'Engineering'; type = 'delivery'; short = 'ENG' }
+            $result = Resolve-Governance -Manifest @{ program = 'Demo'; org = 'demo-org' } `
+                -Source @{ products = @(
+                    @{ name = 'Portal'; short = 'PRT'; sections = @($section) },
+                    @{ name = 'Studio'; short = 'STD' }) } `
+                -Access @{ teamGroups = @(@{ role = 'contributor'; ado = '{key}-Contributors' }, @{ role = 'reader'; ado = '{key}-Readers' });
+                           containerGroups = @(@{ role = 'portfolioManager'; ado = '{key}-PortMgrs' });
+                           roles = @{ contributor = @{ boards = 'contribute' }; reader = @{ boards = 'read' }; portfolioManager = @{ boards = 'edit-requirements' } };
+                           workItemAccess = @{ grantAt = 'product' };
+                           stakeholders = @{ accessLevel = 'stakeholder'; ado = 'Demo-Stakeholders'; scope = 'org' } } `
+                -SourceHash 'testhash'
+            $grants = @($result.areaWorkItemAccess)
+            ($grants | Where-Object group -eq 'PRT-ENG-Contributors').path       | Should -Be '\Demo\Portal'
+            ($grants | Where-Object group -eq 'PRT-ENG-Contributors').permission | Should -Be 'contribute'
+            ($grants | Where-Object group -eq 'PRT-ENG-Readers').permission      | Should -Be 'read'
+            ($grants | Where-Object group -eq 'STD-PortMgrs').path               | Should -Be '\Demo\Studio'
+            # a peer product's groups never reach another product's node
+            @($grants | Where-Object { $_.group -like 'STD-*' -and $_.path -eq '\Demo\Portal' }).Count | Should -Be 0
+        }
+    }
+
+    It 'grants on the team area with grantAt: team' {
+        InModuleScope NKDAgility.AzureDevOps.Governance {
+            $section = @{ name = 'Engineering'; type = 'delivery'; short = 'ENG' }
+            $result = Resolve-Governance -Manifest @{ program = 'Demo'; org = 'demo-org' } `
+                -Source @{ products = @(@{ name = 'Portal'; short = 'PRT'; sections = @($section) }) } `
+                -Access @{ teamGroups = @(@{ role = 'contributor'; ado = '{key}-Contributors' }); containerGroups = @();
+                           roles = @{ contributor = @{ boards = 'contribute' } };
+                           workItemAccess = @{ grantAt = 'team' };
+                           stakeholders = @{ accessLevel = 'stakeholder'; ado = 'Demo-Stakeholders'; scope = 'org' } } `
+                -SourceHash 'testhash'
+            (@($result.areaWorkItemAccess) | Where-Object group -eq 'PRT-ENG-Contributors').path | Should -Be '\Demo\Portal\Engineering'
+        }
+    }
+
+    It 'rejects an unknown boards permission or grantAt once workItemAccess is declared' {
+        InModuleScope NKDAgility.AzureDevOps.Governance {
+            $base = @{ teamGroups = @(); containerGroups = @(@{ role = 'reader'; ado = '{key}-Readers' });
+                       stakeholders = @{ accessLevel = 'stakeholder'; ado = 'D-S'; scope = 'org' } }
+            $badPerm = $base.Clone(); $badPerm.roles = @{ reader = @{ boards = 'everything' } }; $badPerm.workItemAccess = @{ grantAt = 'product' }
+            { Resolve-Governance -Manifest @{ program = 'Demo'; org = 'demo' } -Source @{ products = @(@{ name = 'P'; short = 'P' }) } `
+                -Access $badPerm -SourceHash 'x' } | Should -Throw '*unknown boards permission*'
+            $badScope = $base.Clone(); $badScope.roles = @{ reader = @{ boards = 'read' } }; $badScope.workItemAccess = @{ grantAt = 'org' }
+            { Resolve-Governance -Manifest @{ program = 'Demo'; org = 'demo' } -Source @{ products = @(@{ name = 'P'; short = 'P' }) } `
+                -Access $badScope -SourceHash 'x' } | Should -Throw '*workItemAccess.grantAt*'
+        }
+    }
+
     It 'exposes a members collection on each group (reconciliation target)' {
         $root = $script:resolved.teams | Where-Object name -eq 'Odyssey'
         ($root.securityGroups | Where-Object role -eq 'reader').Keys | Should -Contain 'members'
@@ -610,6 +664,20 @@ Describe 'Pipeline folder ACL resolution' {
             ConvertTo-QueryFolderPermissionBit -Permission 'contribute' | Should -Be 7
             ConvertTo-QueryFolderPermissionBit -Permission 'manage'     | Should -Be 15
         }
+    }
+
+    It 'maps boards permissions to CSS work item bits' {
+        InModuleScope NKDAgility.AzureDevOps.Governance {
+            ConvertTo-AreaWorkItemPermissionBit -Permission 'read'              | Should -Be 17
+            ConvertTo-AreaWorkItemPermissionBit -Permission 'contribute'        | Should -Be 753
+            ConvertTo-AreaWorkItemPermissionBit -Permission 'edit-requirements' | Should -Be 753
+            ConvertTo-AreaWorkItemPermissionBit -Permission 'manage'            | Should -Be 753
+        }
+    }
+
+    It 'throws on an unknown boards permission' {
+        { InModuleScope NKDAgility.AzureDevOps.Governance { ConvertTo-AreaWorkItemPermissionBit -Permission 'owner' } } |
+            Should -Throw
     }
 
     It 'throws on an unknown query folder permission' {

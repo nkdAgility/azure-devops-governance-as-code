@@ -1278,7 +1278,36 @@ function Set-AdoAccessControlEntry {
 # subtree without making its members contributors.
 
 $script:CssNamespaceId    = '83e28ad4-2d72-4ceb-97b0-c7726d5502c3'
-$script:AreaNodeAdminBits = 7   # GENERIC_READ(1) + GENERIC_WRITE(2) + DELETE(4)
+# CSS action bits, as the namespace itself reports them (read from slb-swt
+# 2026-11-10): GENERIC_READ 1, GENERIC_WRITE 2, CREATE_CHILDREN 4, DELETE 8,
+# WORK_ITEM_READ 16, WORK_ITEM_WRITE 32, MANAGE_TEST_PLANS 64,
+# MANAGE_TEST_SUITES 128, WORK_ITEM_SAVE_COMMENT 512.
+$script:AreaNodeAdminBits = 7   # GENERIC_READ(1) + GENERIC_WRITE(2) + CREATE_CHILDREN(4); not DELETE(8)
+
+function ConvertTo-AreaWorkItemPermissionBit {
+    <#
+        .SYNOPSIS
+        Maps an access.yaml roles.*.boards value to CSS allow bits for work
+        items in an area node and its subtree.
+          read              -> GENERIC_READ(1) | WORK_ITEM_READ(16)                      = 17
+          contribute        -> read | WORK_ITEM_WRITE(32) | MANAGE_TEST_PLANS(64)
+                               | MANAGE_TEST_SUITES(128) | WORK_ITEM_SAVE_COMMENT(512) = 753
+          edit-requirements -> contribute. An area ACL cannot tell work item types
+                               apart, so "requirements only" is a process rule, not
+                               a permission.
+          manage            -> contribute. Node management is structural authority,
+                               granted separately to the Admins group.
+    #>
+    [CmdletBinding()]
+    param([Parameter(Mandatory)][string]$Permission)
+    switch ($Permission.Trim()) {
+        'read'              { return 17 }
+        'contribute'        { return 753 }
+        'edit-requirements' { return 753 }
+        'manage'            { return 753 }
+        default             { throw "Unknown boards permission string: '$Permission'" }
+    }
+}
 
 function Get-AdoAreaNodeToken {
     <#
