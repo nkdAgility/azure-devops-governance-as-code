@@ -493,6 +493,31 @@ Apply creates any missing intermediate folders and grants each team group its
 bits; plan and audit report a missing folder or a group lacking its bits.
 Sub-teams share their first-level team's folder.
 
+### Work item access on area paths
+
+Opt-in. Without it, apply sets no work item permissions on area paths and the
+project's default groups decide who can edit what. Declare it in `access.yaml`:
+
+```yaml
+workItemAccess:
+  grantAt: product   # or: team
+```
+
+Each team group then gets its role's `boards:` permission on one area node:
+the team's own area (`team`), or the product node above it (`product`), so a
+programme is open across all its domains while peer products stay out.
+
+| `boards:` | CSS bits on the node and its subtree |
+| --- | --- |
+| `read` | view work items (17) |
+| `contribute` | read + edit work items + comments + manage test plans and suites (753) |
+| `edit-requirements` | same as `contribute`: an area ACL cannot tell work item types apart |
+| `manage` | same as `contribute`: node management is structural authority, granted to Admins separately |
+
+Grants are additive (minimum bits, merge). Apply never removes an ACE, so it
+does not take write access away from the project's default Contributors group;
+restricting that is a separate, manual decision.
+
 ### A team directly on a section
 
 A section normally groups its `items` without creating a team of its own.
