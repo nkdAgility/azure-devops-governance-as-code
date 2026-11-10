@@ -24,6 +24,8 @@
 #   - `iterations: sprints|seasons|none` overrides the type's iteration scope
 #   - `pipelineFolder: true` = the node has builds of its own, so a pipeline
 #     folder (+ team ACL) is created for it (default: false - no folder)
+#   - `queryFolder: true` = a Shared Queries folder mirroring the area path
+#     (+ team ACL from roles.*.queries) is created for it (default: false)
 #   - `systems: [<name>, ...]` = reusable systems from systems.yaml stamped
 #     onto the team: child areas under the team's home area, on the team's own
 #     board (visibility only, zero security). Team nodes and products only.
@@ -45,6 +47,7 @@ products:
           - name: Foundation
             short: FND
             pipelineFolder: true
+            queryFolder: true
             type: delivery      # working team even though Open API nests under it
             iterations: none    # delivery team that does not plan in sprints
             systems: [bug-inbox]
@@ -113,6 +116,7 @@ products:
     dpm: 105
     short: STD
     pipelineFolder: true
+    queryFolder: true
 
   - name: Vista
     dpm: ~            # DPM pending confirmation

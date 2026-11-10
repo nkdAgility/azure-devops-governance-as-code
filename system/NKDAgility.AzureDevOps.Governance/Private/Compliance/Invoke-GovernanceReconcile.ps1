@@ -696,6 +696,123 @@ function Invoke-GovernanceReconcile {
         }
     }
 
+    # ── 7b. Shared query folders ──────────────────────────────────────────────────
+    # Same contract as pipeline folders: the folder exists and each authored
+    # group holds at least its role's bits. Targeted per-folder GETs (ADR-002).
+    $queryFolders = @($Resolved.queryFolders | Where-Object { $_ })
+    if ($queryFolders.Count -gt 0) { Write-Host "`n--- Shared query folders ---" -ForegroundColor Cyan }
+
+    foreach ($qf in $queryFolders) {
+        $qfExists = $false
+        try {
+            $qfExists = [bool](Get-AdoQueryFolder -OrgUrl $OrgUrl -Project $project -Path $qf.path)
+        } catch {
+            $findings.Add("ERROR reading query folder '$($qf.path)': $_")
+            & $rError "read query folder '$($qf.path)': $_"
+            continue
+        }
+
+        if (-not $qfExists) {
+            if ($doFix) {
+                try {
+                    New-AdoQueryFolder -OrgUrl $OrgUrl -Project $project -Path $qf.path
+                    & $rCreated "query folder: $($qf.path)"
+                    $qfExists = $true
+                } catch {
+                    $findings.Add("ERROR creating query folder '$($qf.path)': $_")
+                    & $rError "create query folder '$($qf.path)': $_"
+                }
+            } else {
+                $findings.Add("MISSING query folder: $($qf.path)")
+                if ($Mode -eq 'WhatIf') { & $rWould "create query folder: $($qf.path)" }
+                else                     { & $rMissing "query folder: $($qf.path)" }
+            }
+        } else {
+            & $rOk "query folder: $($qf.path)"
+        }
+
+        if (-not $qfExists) { continue }
+        $desiredAcl = @($qf.acl | Where-Object { $_ })
+        if ($desiredAcl.Count -eq 0) { continue }
+
+        if (-not $projectId) {
+            $projectId = Get-AdoProjectId -OrgUrl $OrgUrl -Project $project
+            if (-not $projectId) {
+                $findings.Add("ERROR could not resolve project ID for query folder ACL checks")
+                & $rError "could not resolve project ID — skipping ACL checks for query folders"
+                continue
+            }
+        }
+
+        try {
+            $qfToken  = Get-AdoQueryFolderToken -OrgUrl $OrgUrl -Project $project -ProjectId $projectId -Path $qf.path
+            $liveAcl  = Get-AdoQueryFolderAcl -OrgUrl $OrgUrl -Token $qfToken
+            $aclDrift = [System.Collections.Generic.List[object]]::new()
+
+            foreach ($ace in $desiredAcl) {
+                $subjectDesc = $liveGroups[$ace.group]
+                if (-not $subjectDesc) {
+                    $aclDrift.Add([ordered]@{
+                        message      = "DRIFT query folder '$($qf.path)': group '$($ace.group)' not found in ADO"
+                        identityDesc = $null
+                        desiredBits  = 0
+                    })
+                    continue
+                }
+                if (-not $identityCache.ContainsKey($subjectDesc)) {
+                    $identityCache[$subjectDesc] = Get-AdoGroupIdentityDescriptor `
+                        -OrgUrl $OrgUrl -SubjectDescriptor $subjectDesc
+                }
+                $identityDesc = $identityCache[$subjectDesc]
+                if (-not $identityDesc) {
+                    $aclDrift.Add([ordered]@{
+                        message      = "DRIFT query folder '$($qf.path)': cannot resolve security identity for '$($ace.group)'"
+                        identityDesc = $null
+                        desiredBits  = 0
+                    })
+                    continue
+                }
+
+                $desiredBits = ConvertTo-QueryFolderPermissionBit -Permission $ace.permission
+                $actualBits  = if ($liveAcl.ContainsKey($identityDesc)) { [int]$liveAcl[$identityDesc] } else { 0 }
+                if (($actualBits -band $desiredBits) -ne $desiredBits) {
+                    $aclDrift.Add([ordered]@{
+                        message      = "DRIFT query folder '$($qf.path)': '$($ace.group)' has allow=$actualBits, need bits $desiredBits"
+                        identityDesc = $identityDesc
+                        desiredBits  = $desiredBits
+                    })
+                }
+            }
+
+            if ($aclDrift.Count -eq 0) {
+                & $rOk "query folder ACL: $($qf.path)"
+            } elseif ($doFix) {
+                $fixFailed = $false
+                foreach ($item in $aclDrift) {
+                    if (-not $item.identityDesc) {
+                        $findings.Add($item.message); & $rError $item.message; $fixFailed = $true; continue
+                    }
+                    try {
+                        Set-AdoQueryFolderAce -OrgUrl $OrgUrl -Token $qfToken `
+                            -IdentityDescriptor $item.identityDesc -AllowBits $item.desiredBits
+                    } catch {
+                        $findings.Add("ERROR setting ACL on query folder '$($qf.path)' for identity '$($item.identityDesc)': $_")
+                        & $rError "set query folder ACL '$($qf.path)': $_"
+                        $fixFailed = $true
+                    }
+                }
+                if (-not $fixFailed) { & $rFixed "query folder ACL: $($qf.path)" }
+            } else {
+                foreach ($item in $aclDrift) { $findings.Add($item.message) }
+                if ($Mode -eq 'WhatIf') { & $rWould "correct query folder ACL: $($qf.path)" }
+                else                     { & $rDrift "query folder ACL: $($qf.path)" }
+            }
+        } catch {
+            $findings.Add("ERROR reading ACL for query folder '$($qf.path)': $_")
+            & $rError "read ACL for query folder '$($qf.path)': $_"
+        }
+    }
+
     # ── 4. Team iteration scope — runs after both teams and iteration paths exist ──
     # Exact-match: each team subscribes to precisely its in-scope window.
     # ROLLING MAINTENANCE, not compliance: the window is time-based and slides

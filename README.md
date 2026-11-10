@@ -478,6 +478,21 @@ A node's global key is the product-qualified chain of `short` codes — Portal's
 Graphics Pipeline is `PTL-GPI`. That key names its groups (`PTL-GPI-Contributors`)
 and its membership file (`members/PTL-GPI.yaml`).
 
+### Pipeline and shared query folders
+
+Both are opt-in per node (product or first-level team) and mirror the node's
+area path:
+
+| Flag | Creates | Permissions from `access.yaml roles.<role>.` |
+| --- | --- | --- |
+| `pipelineFolder: true` | pipeline folder `\Portal\Platform\Foundation` | `pipelines:` (`read`, `Edit, Queue`) |
+| `queryFolder: true` | query folder `Shared Queries/Portal/Platform/Foundation` | `queries:` (`read`, `contribute`, `manage`) |
+
+`contribute` is Read + Contribute + Delete; `manage` adds Manage Permissions.
+Apply creates any missing intermediate folders and grants each team group its
+bits; plan and audit report a missing folder or a group lacking its bits.
+Sub-teams share their first-level team's folder.
+
 ### A team directly on a section
 
 A section normally groups its `items` without creating a team of its own.

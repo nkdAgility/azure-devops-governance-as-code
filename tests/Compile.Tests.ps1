@@ -223,6 +223,31 @@ Describe 'Compile stage' {
         ($script:resolved.pipelineFolders.path) | Should -Contain '\Studio'
     }
 
+    It 'creates a shared query folder mirroring the area path, with the team ACL' {
+        $fnd = $script:resolved.queryFolders | Where-Object path -eq 'Shared Queries/Portal/Platform/Foundation'
+        $fnd | Should -Not -BeNullOrEmpty
+        ($fnd.acl | Where-Object group -eq 'PTL-FND-Contributors').permission | Should -Be 'contribute'
+        ($fnd.acl | Where-Object group -eq 'PTL-FND-Readers').permission      | Should -Be 'read'
+    }
+
+    It 'creates query folders only for nodes declaring queryFolder: true (products included)' {
+        ($script:resolved.queryFolders.path) | Should -Contain 'Shared Queries/Studio'
+        ($script:resolved.queryFolders.path) | Should -Not -Contain 'Shared Queries/Portal/Platform/Stream Modeling'
+        ($script:resolved.queryFolders.path) | Should -Not -Contain 'Shared Queries/Portal/Platform/Foundation/Open API'
+        @($script:resolved.queryFolders).Count | Should -Be 2
+    }
+
+    It 'rejects an unknown queries permission in access.yaml' {
+        InModuleScope NKDAgility.AzureDevOps.Governance {
+            { Resolve-Governance -Manifest @{ program = 'Demo'; org = 'demo' } `
+                -Source @{ products = @(@{ name = 'P'; short = 'P'; queryFolder = $true }) } `
+                -Access @{ teamGroups = @(); containerGroups = @(@{ role = 'reader'; ado = '{key}-Readers' });
+                           roles = @{ reader = @{ queries = 'everything' } };
+                           stakeholders = @{ accessLevel = 'stakeholder'; ado = 'D-S'; scope = 'org' } } `
+                -SourceHash 'x' } | Should -Throw '*unknown queries permission*'
+        }
+    }
+
     It 'exposes a members collection on each group (reconciliation target)' {
         $root = $script:resolved.teams | Where-Object name -eq 'Odyssey'
         ($root.securityGroups | Where-Object role -eq 'reader').Keys | Should -Contain 'members'
@@ -576,6 +601,35 @@ Describe 'Pipeline folder ACL resolution' {
             ConvertTo-RepoPermissionBit -Permission 'read'        | Should -Be 2
             ConvertTo-RepoPermissionBit -Permission 'write'       | Should -Be 16438
             ConvertTo-RepoPermissionBit -Permission 'innersource' | Should -Be 16402
+        }
+    }
+
+    It 'maps query folder permissions to WorkItemQueryFolders bits' {
+        InModuleScope NKDAgility.AzureDevOps.Governance {
+            ConvertTo-QueryFolderPermissionBit -Permission 'read'       | Should -Be 1
+            ConvertTo-QueryFolderPermissionBit -Permission 'contribute' | Should -Be 7
+            ConvertTo-QueryFolderPermissionBit -Permission 'manage'     | Should -Be 15
+        }
+    }
+
+    It 'throws on an unknown query folder permission' {
+        { InModuleScope NKDAgility.AzureDevOps.Governance { ConvertTo-QueryFolderPermissionBit -Permission 'owner' } } |
+            Should -Throw
+    }
+
+    It 'builds the query folder security token from the folder id chain' {
+        InModuleScope NKDAgility.AzureDevOps.Governance {
+            Mock Get-AdoQueryFolder {
+                switch ($Path) {
+                    'Shared Queries'        { [pscustomobject]@{ id = 'sq'; isFolder = $true } }
+                    'Shared Queries/Portal' { [pscustomobject]@{ id = 'ptl'; isFolder = $true } }
+                    default                 { $null }
+                }
+            }
+            Get-AdoQueryFolderToken -OrgUrl 'https://dev.azure.com/x' -Project 'P' -ProjectId 'pid' -Path 'Shared Queries/Portal' |
+                Should -Be '$/pid/sq/ptl'
+            { Get-AdoQueryFolderToken -OrgUrl 'https://dev.azure.com/x' -Project 'P' -ProjectId 'pid' -Path 'Shared Queries/Portal/Missing' } |
+                Should -Throw '*does not exist*'
         }
     }
 

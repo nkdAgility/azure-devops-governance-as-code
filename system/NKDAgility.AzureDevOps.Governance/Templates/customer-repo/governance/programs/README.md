@@ -6,7 +6,7 @@ organisation or project, compiled and reconciled by the governance module.
 ```
 programs/<name>/
   manifest.yaml    program identity, organisation URL, accessToken variable name
-  hierarchy.yaml   the authored hierarchy (areas, teams, repos, pipeline folders)
+  hierarchy.yaml   the authored hierarchy (areas, teams, repos, pipeline/query folders)
   access.yaml      roles and the group catalog
   cadence.yaml     iteration cadence (optional)
   taxonomy.yaml    governed vocabularies — the sanctioned tag list (optional)

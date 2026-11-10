@@ -180,6 +180,11 @@ Declared in `programs/<name>/systems.yaml`; applied per node with `systems: [<na
 - Each folder's **ACL** matches the resolved `acl` list — wrong permissions and extra ACEs are both findings.
 - Pipeline folders are **opt-in**: a node (team or product) only gets one when it declares `pipelineFolder: true` in `hierarchy.yaml` — meaning it has builds of its own. No flag → no folder, no ACL.
 
+### Shared query folders (ADR-013)
+- The same contract as pipeline folders, opted into with `queryFolder: true` on a product or first-level team. Resolved into `resolved.queryFolders` as `Shared Queries/<area path below the program root>`, with an `acl` built from `access.yaml roles.<role>.queries` (`read` = 1, `contribute` = 7, `manage` = 15 in the WorkItemQueryFolders namespace). An unknown value fails the build.
+- Every folder exists (apply creates missing intermediates too) and each group holds at least its bits. Existence is a targeted `GET _apis/wit/queries/{path}` per folder (ADR-002). The ACL token is the chain of folder GUIDs (`$/{projectId}/{sharedQueriesId}/{id}...`), so it is built by resolving each level — a missing level throws rather than writing an ACE to a guessed token.
+- Not pruned: the queries inside belong to the teams.
+
 ### Tags (governed vocabulary)
 Declared in `programs/<name>/taxonomy.yaml`, not `hierarchy.yaml` — a flat list of allowed strings is not part of the product/team tree. A `tags:` block left behind in `hierarchy.yaml` **fails the build** with a migration hint.
 
@@ -317,6 +322,7 @@ Key decisions are recorded in `.agents/decisions/`. Read these before making str
 | [ADR-010](decisions/ADR-010-preflight-migration-query-scope.md) | The migration query is a committed WIQL fragment in `sources.yaml scope:`, shared with the migration toolchain, and it scopes what preflight validates |
 | [ADR-011](decisions/ADR-011-tag-dispositions.md) | `taxonomy.yaml` records a destination per unsanctioned tag — `boardColumns`, `retire`, or undecided — plus `sanctionedPatterns` for families minted per season; no "tolerated" state, because the audit knows only the sanctioned list |
 | [ADR-012](decisions/ADR-012-program-azure-cli-context.md) | `manifest.yaml azure:` declares the program's Azure CLI profile, tenant, subscription and `signInAs`; every command enters it per process so a customer sign-in cannot disturb the machine's other jobs, and `validate`/`connect`/`doctor` check the block is present, uncontested and outside every working tree |
+| [ADR-013](decisions/ADR-013-shared-query-folders.md) | Shared query folders are governed exactly like pipeline folders — `queryFolder: true`, path mirrors the area path under `Shared Queries`, ACL from `roles.*.queries`; minimum-bits check, no prune |
 
 ---
 

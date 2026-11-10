@@ -231,6 +231,18 @@ function Add-NodeRepos {
     }
 }
 
+# Permission names accepted by access.yaml `roles.<role>.queries`. Bits are
+# mapped at reconcile time by ConvertTo-QueryFolderPermissionBit.
+$script:QueryFolderPermissionNames = @('read', 'contribute', 'manage')
+
+function ConvertTo-SharedQueryFolderPath {
+    <# '\Portal\Platform\Foundation' -> 'Shared Queries/Portal/Platform/Foundation' #>
+    [CmdletBinding()]
+    param([Parameter(Mandatory)][string]$RelativeAreaPath)
+    $segments = @($RelativeAreaPath.Trim('\') -split '\\' | Where-Object { $_ })
+    return (@('Shared Queries') + $segments) -join '/'
+}
+
 function Add-TeamNode {
     <# Recursively projects a team node (and its nested sub-teams) under a structural node.
        Only first-level teams get a pipeline folder; sub-teams share the parent's. #>
@@ -299,6 +311,8 @@ function Add-TeamNode {
         # A team only gets a pipeline folder when it declares it has builds of
         # its own: `pipelineFolder: true` in hierarchy.yaml. Default: no folder.
         $folder = if ($IsFirstLevel -and [bool]$Node.pipelineFolder) { $path.Substring($ProgramRoot.Length) } else { $null }
+        # Shared query folders opt in the same way: `queryFolder: true`.
+        $queryFolder = if ($IsFirstLevel -and [bool]$Node.queryFolder) { ConvertTo-SharedQueryFolderPath $path.Substring($ProgramRoot.Length) } else { $null }
         $Ctx.Teams.Add([ordered]@{
             name            = $qualifiedName
             short           = $Node.short
@@ -311,6 +325,7 @@ function Add-TeamNode {
             iterationScope  = $iterScope
             backlogs        = @($typeDef.backlogs)
             pipelineFolder  = $folder
+            queryFolder     = $queryFolder
         })
         # Team + sideload combo: the team exists AND the listed teams see the
         # path on their boards (board scope only, never authority).
@@ -393,6 +408,7 @@ function Resolve-Governance {
         Teams           = [System.Collections.Generic.List[object]]::new()
         Repos           = [System.Collections.Generic.List[object]]::new()
         PipelineFolders = [System.Collections.Generic.List[object]]::new()
+        QueryFolders    = [System.Collections.Generic.List[object]]::new()
         Sideloaded      = @{}   # code -> paths SIDELOADED onto that team (board only, zero security)
         TypeDefs        = $typeDefs
         SystemDefs      = Get-SystemDefs -Systems $Systems
@@ -414,6 +430,7 @@ function Resolve-Governance {
         iterationScope  = $portfolioDef.iterationScope
         backlogs        = @($portfolioDef.backlogs)
         pipelineFolder  = $null
+        queryFolder     = $null
     })
 
     foreach ($product in @($Source.products)) {
@@ -462,6 +479,7 @@ function Resolve-Governance {
                 iterationScope  = $portfolioDef.iterationScope
                 backlogs        = @($portfolioDef.backlogs)
                 pipelineFolder  = if ($productHasBuilds) { $productPath.Substring($root.Length) } else { $null }
+                queryFolder     = if ([bool]$product.queryFolder) { ConvertTo-SharedQueryFolderPath $productPath.Substring($root.Length) } else { $null }
             }
             if ($product.scope) { $teamObj.scope = $product.scope }
             $ctx.Teams.Add($teamObj)
@@ -594,6 +612,30 @@ function Resolve-Governance {
         })
     }
 
+    # Shared query folders: same shape as pipeline folders — the folder under
+    # 'Shared Queries' mirrors the area path (truncated at the first-level
+    # team), with the owning team's permissions from the roles catalog
+    # (`queries:`). Governance owns the folder + ACL; teams write the queries.
+    foreach ($team in $ctx.Teams) {
+        if (-not $team.queryFolder) { continue }
+        if ($team.scope -eq 'future') { continue }   # scope:future products are invisible
+        $acl = [System.Collections.Generic.List[object]]::new()
+        foreach ($group in $team.securityGroups) {
+            $roleDef = $Access.roles[[string]$group.role]
+            $permission = if ($roleDef) { $roleDef.queries } else { $null }
+            if (-not $permission) { continue }
+            if ([string]$permission -notin $script:QueryFolderPermissionNames) {
+                throw "access.yaml: role '$($group.role)' has unknown queries permission '$permission' (expected one of: $($script:QueryFolderPermissionNames -join ', '))."
+            }
+            $acl.Add([ordered]@{ group = $group.ado; permission = [string]$permission })
+        }
+        $ctx.QueryFolders.Add([ordered]@{
+            path = $team.queryFolder
+            team = $team.name
+            acl  = $acl
+        })
+    }
+
     # Structural authority: each {key}-Admins group gets node-management rights
     # over the team's HOME area only (delegated ownership — structural
     # permission, not membership). Sideloaded paths carry ZERO security:
@@ -630,6 +672,7 @@ function Resolve-Governance {
         teams           = $ctx.Teams
         repos           = $ctx.Repos
         pipelineFolders = $ctx.PipelineFolders
+        queryFolders    = $ctx.QueryFolders
         structuralAuthority = $authority
         stakeholders    = [ordered]@{
             accessLevel = $Access.stakeholders.accessLevel

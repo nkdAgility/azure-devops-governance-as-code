@@ -468,7 +468,7 @@ function Get-AdoScopeProbeSet {
         @{ Family = 'Project & Team (read)';        Scope = 'vso.project';        NeededFor = 'plan, audit'; Method = 'GET';  Path = '_apis/projects' }
         @{ Family = 'Project & Team (manage)';      Scope = 'vso.project_manage'; NeededFor = 'apply (project/team create)'; Method = 'POST'; Path = '_apis/projects'; Body = @{} }
         @{ Family = 'Work items (read)';            Scope = 'vso.work';           NeededFor = 'plan, audit'; Method = 'GET';  Path = "$p/_apis/wit/classificationnodes/areas" }
-        @{ Family = 'Work items (write)';           Scope = 'vso.work_write';     NeededFor = 'apply (area/iteration paths, team settings)'; Method = 'POST'; Path = "$p/_apis/wit/classificationnodes/areas"; Body = @{} }
+        @{ Family = 'Work items (write)';           Scope = 'vso.work_write';     NeededFor = 'apply (area/iteration paths, team settings, shared query folders)'; Method = 'POST'; Path = "$p/_apis/wit/classificationnodes/areas"; Body = @{} }
         @{ Family = 'Code (read)';                  Scope = 'vso.code';           NeededFor = 'plan, audit'; Method = 'GET';  Path = "$p/_apis/git/repositories" }
         @{ Family = 'Code (read, write & manage)';  Scope = 'vso.code_manage';    NeededFor = 'apply (repo create)'; Method = 'POST'; Path = "$p/_apis/git/repositories"; Body = @{} }
         @{ Family = 'Build (read)';                 Scope = 'vso.build';          NeededFor = 'plan, audit'; Method = 'GET';  Path = "$p/_apis/build/folders" }
@@ -482,7 +482,7 @@ function Get-AdoScopeProbeSet {
         # EntraFallback: apply retries security writes with an az login token
         # when the PAT 401s, so doctor probes the same fallback before
         # declaring the capability missing.
-        @{ Family = 'Security (ACL manage)';        Scope = 'vso.security_manage / Full access'; NeededFor = 'apply (pipeline folder ACLs, structural authority)'; Method = 'POST'; Path = "_apis/accesscontrolentries/$script:PipelineBuildNamespaceId"; Body = @{ token = 'governance-scope-probe'; merge = $true; accessControlEntries = @() }; EntraFallback = $true }
+        @{ Family = 'Security (ACL manage)';        Scope = 'vso.security_manage / Full access'; NeededFor = 'apply (pipeline/query folder ACLs, structural authority)'; Method = 'POST'; Path = "_apis/accesscontrolentries/$script:PipelineBuildNamespaceId"; Body = @{ token = 'governance-scope-probe'; merge = $true; accessControlEntries = @() }; EntraFallback = $true }
     )
 }
 
@@ -968,6 +968,139 @@ function Set-AdoPipelineFolderAce {
         )
     }
     Set-AdoAccessControlEntry -OrgUrl $OrgUrl -NamespaceId $script:PipelineBuildNamespaceId -Body $body
+}
+
+# ─── Shared query folders + ACLs (REST) ───────────────────────────────────────
+# Folders: GET/POST {project}/_apis/wit/queries/{path}. Security: the
+# WorkItemQueryFolders namespace, token '$/{projectId}/{folderId}/{subId}/...'
+# — the chain of folder GUIDs from 'Shared Queries' down, not the path names.
+
+$script:QueryFolderNamespaceId = '71356614-aad7-4757-8f2c-0fb3bff6f680'
+
+function ConvertTo-QueryFolderPermissionBit {
+    <#
+        .SYNOPSIS
+        Maps an access.yaml roles.*.queries value to WorkItemQueryFolders allow bits.
+          read       -> Read(1)
+          contribute -> Read(1) | Contribute(2) | Delete(4)
+          manage     -> contribute | ManagePermissions(8)
+    #>
+    [CmdletBinding()]
+    param([Parameter(Mandatory)][string]$Permission)
+    switch ($Permission.Trim()) {
+        'read'       { return 1 }
+        'contribute' { return 7 }
+        'manage'     { return 15 }
+        default      { throw "Unknown query folder permission string: '$Permission'" }
+    }
+}
+
+function Get-AdoQueryFolder {
+    <# Targeted read of one query item by path ('Shared Queries/A/B').
+       Returns the item (id, name, path, isFolder) or $null when it does not exist.
+       Any other failure throws. #>
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)][string]$OrgUrl,
+        [Parameter(Mandatory)][string]$Project,
+        [Parameter(Mandatory)][string]$Path
+    )
+    $p   = [Uri]::EscapeDataString($Project)
+    $sub = (($Path.Trim('/') -split '/') | ForEach-Object { [Uri]::EscapeDataString($_) }) -join '/'
+    try {
+        $item = Invoke-AdoRest -OrgUrl $OrgUrl -Path "$p/_apis/wit/queries/$sub`?`$depth=0"
+    } catch {
+        # TF401243: the query or folder does not exist.
+        if ("$_" -match '404|Not Found|TF401243|does not exist') { return $null }
+        throw
+    }
+    if ($item -and -not $item.isFolder) {
+        throw "Query path '$Path' exists but is a query, not a folder."
+    }
+    return $item
+}
+
+function New-AdoQueryFolder {
+    <# Creates the folder at 'Shared Queries/A/B', creating any missing
+       intermediate folders on the way down. Throws on failure. #>
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)][string]$OrgUrl,
+        [Parameter(Mandatory)][string]$Project,
+        [Parameter(Mandatory)][string]$Path
+    )
+    $p        = [Uri]::EscapeDataString($Project)
+    $segments = @($Path.Trim('/') -split '/')
+    if ($segments.Count -lt 2) { throw "Refusing to create query folder '$Path': it must sit below 'Shared Queries'." }
+    for ($i = 1; $i -lt $segments.Count; $i++) {
+        $current = ($segments[0..$i]) -join '/'
+        if (Get-AdoQueryFolder -OrgUrl $OrgUrl -Project $Project -Path $current) { continue }
+        $parent  = (($segments[0..($i - 1)]) | ForEach-Object { [Uri]::EscapeDataString($_) }) -join '/'
+        $created = Invoke-AdoRest -OrgUrl $OrgUrl -Path "$p/_apis/wit/queries/$parent" -Method 'POST' `
+            -Body @{ name = $segments[$i]; isFolder = $true }
+        if (-not $created -or -not $created.id) { throw "Failed to create query folder '$current'." }
+    }
+}
+
+function Get-AdoQueryFolderToken {
+    <# Builds the WorkItemQueryFolders security token for a folder path by
+       resolving each folder's id from 'Shared Queries' down. Throws if any
+       level is missing — an ACL on a guessed token would be silently wrong. #>
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)][string]$OrgUrl,
+        [Parameter(Mandatory)][string]$Project,
+        [Parameter(Mandatory)][string]$ProjectId,
+        [Parameter(Mandatory)][string]$Path
+    )
+    $segments = @($Path.Trim('/') -split '/')
+    $ids = foreach ($i in 0..($segments.Count - 1)) {
+        $current = ($segments[0..$i]) -join '/'
+        $item = Get-AdoQueryFolder -OrgUrl $OrgUrl -Project $Project -Path $current
+        if (-not $item) { throw "Query folder '$current' does not exist; cannot build its security token." }
+        $item.id
+    }
+    return '$/' + $ProjectId + '/' + (@($ids) -join '/')
+}
+
+function Get-AdoQueryFolderAcl {
+    <# Returns securityIdentityDescriptor -> allowBits for the explicit
+       (non-inherited) ACEs on a query folder token. Throws on failure. #>
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)][string]$OrgUrl,
+        [Parameter(Mandatory)][string]$Token
+    )
+    $tokenEnc = [Uri]::EscapeDataString($Token)
+    $acl = @{}
+    $result = Invoke-AdoRest -OrgUrl $OrgUrl `
+        -Path "_apis/accesscontrollists/$script:QueryFolderNamespaceId`?token=$tokenEnc&includeExtendedInfo=false&recurse=false"
+    foreach ($list in @($result.value)) {
+        foreach ($prop in $list.acesDictionary.PSObject.Properties) {
+            $acl[$prop.Name] = [int]$prop.Value.allow
+        }
+    }
+    return $acl
+}
+
+function Set-AdoQueryFolderAce {
+    <# Grants allow-bits to a security identity on a query folder token
+       (merge=true, so existing bits are OR-ed rather than replaced). #>
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)][string]$OrgUrl,
+        [Parameter(Mandatory)][string]$Token,
+        [Parameter(Mandatory)][string]$IdentityDescriptor,
+        [Parameter(Mandatory)][int]$AllowBits
+    )
+    $body = @{
+        token   = $Token
+        merge   = $true
+        accessControlEntries = @(
+            @{ descriptor = $IdentityDescriptor; allow = $AllowBits; deny = 0 }
+        )
+    }
+    Set-AdoAccessControlEntry -OrgUrl $OrgUrl -NamespaceId $script:QueryFolderNamespaceId -Body $body
 }
 
 # ─── Team administrators (Identity security namespace) ───────────────────────

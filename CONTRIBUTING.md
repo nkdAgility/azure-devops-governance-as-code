@@ -130,12 +130,12 @@ your real permissions. If you must use a PAT instead, it needs these scopes:
 | Scope | PAT UI name | Needed for |
 | --- | --- | --- |
 | `vso.project_manage` | Project & Team — Read, write & manage | Creating projects and teams |
-| `vso.work_write` | Work Items — Read & write | Area/iteration paths, team settings |
+| `vso.work_write` | Work Items — Read & write | Area/iteration paths, team settings, shared query folders |
 | `vso.code_manage` | Code — Read, write & manage | Creating repos |
 | `vso.build_execute` | Build — Read & execute | Pipeline folders |
 | `vso.graph_manage` | Graph — Read & manage | Groups and membership |
 | `vso.memberentitlementmanagement` | Member Entitlement Management — Read | Resolving member UPNs to descriptors |
-| `vso.security_manage` | *(not offered in the PAT UI)* | Pipeline folder ACLs, structural authority |
+| `vso.security_manage` | *(not offered in the PAT UI)* | Pipeline and query folder ACLs, structural authority |
 
 The last row is why Entra matters: security ACL writes need permissions no PAT
 scope short of full access grants, and many organisations forbid full-access

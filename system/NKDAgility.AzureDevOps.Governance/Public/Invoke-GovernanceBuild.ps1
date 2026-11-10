@@ -24,8 +24,8 @@ function Invoke-GovernanceBuild {
 
     Write-Host "Compiled '$program' -> $written" -ForegroundColor Green
     $iterCount = if ($resolved.iterations) { $resolved.iterations.paths.Count } else { 0 }
-    Write-Host ("  {0} area paths, {1} teams, {2} repos, {3} pipeline folders, {4} iteration paths" -f `
-        $resolved.areaPaths.Count, $resolved.teams.Count, $resolved.repos.Count, $resolved.pipelineFolders.Count, $iterCount)
+    Write-Host ("  {0} area paths, {1} teams, {2} repos, {3} pipeline folders, {4} query folders, {5} iteration paths" -f `
+        $resolved.areaPaths.Count, $resolved.teams.Count, $resolved.repos.Count, $resolved.pipelineFolders.Count, @($resolved.queryFolders).Count, $iterCount)
 
     return $written
 }

@@ -159,6 +159,23 @@ previously left alone, without a line of consumer code changing.
 
 ### Fixed
 
+- **A declared az `profile` no longer hides the `azure-devops` CLI extension.**
+  Azure CLI keeps extensions under `AZURE_CONFIG_DIR`, so entering a program's
+  profile (ADR-012) moved `az` away from the machine's installed extensions.
+  Every `az devops ...` call then tried to dynamically install one, prompted,
+  found no console and failed with `EOF when reading a line`. Most call sites
+  redirect that to `$null`, so the failure surfaced as a *wrong answer* rather
+  than an error: an authored member who exists in the organisation was reported
+  as unresolvable, with a "did you mean" suggestion naming the identical UPN —
+  because the suggestion path goes over REST and had never stopped working. The
+  same fault reaches `az devops security group list` and `team list`, where an
+  empty result reads as an organisation with no groups or teams.
+  `Enter-GovernanceAzContext` now points `AZURE_EXTENSION_DIR` at whichever
+  extension directory applied before the profile was entered, and restores it
+  on the way out: extensions are code, not credentials, so only the identity
+  needs isolating. An `AZURE_EXTENSION_DIR` the operator set themselves is left
+  alone.
+
 - Source-org authentication failures in preflight are diagnosed, not guessed.
   `Enter-AdoOrgAuth` now says whether the Entra token was rejected by the org
   (Conditional Access forced sign-out) or could not be minted (the az error,

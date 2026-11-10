@@ -21,10 +21,12 @@ roles:
     boards:    read
     repos:     read
     pipelines: read
+    queries:   read
   contributor:
     boards:    contribute
     repos:     contribute
     pipelines: "Edit, Queue"
+    queries:   contribute
   portfolioManager:
     boards:    edit-requirements
     repos:     read
