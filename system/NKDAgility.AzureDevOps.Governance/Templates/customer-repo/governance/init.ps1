@@ -61,7 +61,11 @@ if (-not (Get-Module -ListAvailable -Name 'powershell-yaml')) {
     Install-Module -Name 'powershell-yaml' -Scope CurrentUser -Force -AllowClobber
 }
 
-Import-Module $modulePath -Force
+# -Global: the workspace init dot-sources this file from inside a module function
+# (Invoke-AutomationWorkspaceInit), so a plain import lands in THAT module's scope and
+# leaves with it when the bootstrap copy is removed - the operator's shell then has no
+# governance commands at all.
+Import-Module $modulePath -Force -Global
 
 # --- Register this capability's safety hook --------------------------------
 # .claude\hooks\deny-governance-apply.ps1 is shipped and refreshed by this
@@ -120,7 +124,11 @@ $Global:NkdaGovernanceFallbackOut = Join-Path $PSScriptRoot 'out'
 # Resolve a program name to the two paths every governance command needs, so runbooks and
 # CI say 'odyssey' rather than repeating both. This is workspace glue, deliberately not
 # engine code: the module's commands stay explicit about what they read and write.
-function Global:Invoke-Governance {
+#
+# Defined from an UNBOUND script block. A 'function Global:' written here would belong to
+# the session state this file runs in - the automation bootstrap module, when the workspace
+# init loads it - and would disappear when that module is removed at the end of init.
+$invokeGovernanceBody = {
     [CmdletBinding()]
     param(
         [Parameter(Mandatory, Position = 0)]
@@ -159,6 +167,7 @@ function Global:Invoke-Governance {
         'apply' { Invoke-GovernanceApply -ProgramPath $programPath -ResolvedPath $resolvedPath -Org $Org -WhatIf:$WhatIf -Prune:$Prune }
     }
 }
+Set-Item -Path Function:\Global:Invoke-Governance -Value ([scriptblock]::Create($invokeGovernanceBody.ToString()))
 
 $programs = @(Get-ChildItem -LiteralPath $programsRoot -Directory -ErrorAction SilentlyContinue |
         Where-Object { Test-Path -LiteralPath (Join-Path $_.FullName 'manifest.yaml') })
