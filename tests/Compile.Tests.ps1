@@ -680,6 +680,26 @@ Describe 'Pipeline folder ACL resolution' {
             Should -Throw
     }
 
+    It 'resolves a user descriptor through user entitlements, exact match only' {
+        InModuleScope NKDAgility.AzureDevOps.Governance {
+            Mock Invoke-AdoRest {
+                $entry = [pscustomobject]@{ user = [pscustomobject]@{ principalName = 'ROlufsen@example.com'; descriptor = 'aad.rudi' } }
+                $near  = [pscustomobject]@{ user = [pscustomobject]@{ principalName = 'ROlufsen2@example.com'; descriptor = 'aad.other' } }
+                [pscustomobject]@{ members = @($near, $entry); items = @($near, $entry) }
+            }
+            Find-AdoUserDescriptor -OrgUrl 'https://dev.azure.com/x' -Upn 'rolufsen@example.com' | Should -Be 'aad.rudi'
+            Find-AdoUserDescriptor -OrgUrl 'https://dev.azure.com/x' -Upn 'nobody@example.com'   | Should -BeNullOrEmpty
+        }
+    }
+
+    It 'throws when the user lookup itself fails, rather than reporting "no such user"' {
+        InModuleScope NKDAgility.AzureDevOps.Governance {
+            Mock Invoke-AdoRest { throw 'Access Denied: needs ReadExtended Users' }
+            { Find-AdoUserDescriptor -OrgUrl 'https://dev.azure.com/x' -Upn 'rolufsen@example.com' } |
+                Should -Throw '*Access Denied*'
+        }
+    }
+
     It 'throws on an unknown query folder permission' {
         { InModuleScope NKDAgility.AzureDevOps.Governance { ConvertTo-QueryFolderPermissionBit -Permission 'owner' } } |
             Should -Throw

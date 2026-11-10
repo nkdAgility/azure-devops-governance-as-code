@@ -771,13 +771,28 @@ function Get-AdoGroupMemberSet {
 }
 
 function Find-AdoUserDescriptor {
-    <# Looks up an ADO user by UPN/email and returns the graph descriptor, or $null. #>
+    <#
+        Looks up an ADO user by UPN/email and returns the graph descriptor.
+        Returns $null only when the organisation has no such user; a lookup
+        that fails throws with the real error.
+
+        Uses the user entitlements REST API, the same route as
+        Find-AdoUserSuggestion. It used `az devops user show`, which needs the
+        'ReadExtended Users' permission a PAT is often refused, and discarded
+        the refusal: every authored member then read as "no such user", next to
+        a suggestion naming that same user (slb-swt, 2026-11-10).
+    #>
     [CmdletBinding()]
     param([string]$OrgUrl, [string]$Upn)
-    $json = az devops user show --organization $OrgUrl --user $Upn --output json 2>$null
-    if ($LASTEXITCODE -ne 0 -or [string]::IsNullOrWhiteSpace($json)) { return $null }
-    $user = ($json | ConvertFrom-Json).user
-    return $user.subjectDescriptor ?? $user.descriptor
+    $r = Invoke-AdoRest -OrgUrl $OrgUrl -Path "_apis/userentitlements?`$filter=name eq '$Upn'" `
+        -ApiVersion '7.1-preview.3'
+    # The response carries the same entries under both 'members' and 'items';
+    # the filter is a contains-style name search, so keep only exact matches.
+    $match = @(@($r.members) + @($r.items) | Where-Object {
+            $_ -and $_.user -and ($_.user.principalName -eq $Upn -or $_.user.mailAddress -eq $Upn)
+        } | Select-Object -First 1)
+    if ($match.Count -eq 0) { return $null }
+    return $match[0].user.descriptor
 }
 
 function Find-AdoUserSuggestion {

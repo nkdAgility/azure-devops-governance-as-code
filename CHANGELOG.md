@@ -17,6 +17,17 @@ previously left alone, without a line of consumer code changing.
 
 ## [Unreleased]
 
+### Fixed
+
+- **Authored members no longer read as "unresolvable" when the lookup is
+  refused.** User descriptors are resolved through the user entitlements REST
+  API instead of `az devops user show`, which needs 'ReadExtended Users' (often
+  refused to a PAT) and discarded that error: every member and team admin was
+  reported as "no org member has this exact UPN", next to a suggestion naming
+  the same person, and apply added no one to any group. A lookup that fails now
+  throws with the real error; `$null` means only that the user is not in the
+  organisation.
+
 ### Added
 
 - **Work item access on area paths**, opt-in through `access.yaml
