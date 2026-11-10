@@ -66,13 +66,38 @@ function Enter-GovernanceAzContext {
         [switch]$Quiet
     )
 
-    $state = @{ Previous = $env:AZURE_CONFIG_DIR; Changed = $false; Context = $null }
+    $state = @{
+        Previous             = $env:AZURE_CONFIG_DIR
+        PreviousExtensionDir = $env:AZURE_EXTENSION_DIR
+        Changed              = $false
+        ExtensionDirChanged  = $false
+        Context              = $null
+    }
     $ctx = Get-GovernanceAzContext -Manifest $Manifest
     $state.Context = $ctx
     if (-not $ctx -or -not $ctx.ProfileDir) { return $state }
 
     if ($env:AZURE_CONFIG_DIR -ne $ctx.ProfileDir) {
         New-Item -ItemType Directory -Path $ctx.ProfileDir -Force | Out-Null
+
+        # Azure CLI extensions live UNDER AZURE_CONFIG_DIR, and they are code,
+        # not credentials. Moving the profile therefore hides the azure-devops
+        # extension from an otherwise working machine: `az devops ...` decides
+        # it has to dynamically install it, prompts, finds no console, and dies
+        # with "EOF when reading a line". Most callers redirect that to $null
+        # and get $null back, so a missing extension reads as "that user does
+        # not exist" or "the organisation has no groups" — a silent wrong
+        # answer, which is worse than a failure. Isolate the identity; keep the
+        # extensions that were already in effect.
+        if (-not $env:AZURE_EXTENSION_DIR) {
+            $baseConfig = if ($state.Previous) { $state.Previous } else { Join-Path $HOME '.azure' }
+            $extDir = Join-Path $baseConfig 'cliextensions'
+            if (Test-Path -LiteralPath $extDir) {
+                $env:AZURE_EXTENSION_DIR = $extDir
+                $state.ExtensionDirChanged = $true
+            }
+        }
+
         $env:AZURE_CONFIG_DIR = $ctx.ProfileDir
         $state.Changed = $true
     }
@@ -84,11 +109,15 @@ function Enter-GovernanceAzContext {
 }
 
 function Exit-GovernanceAzContext {
-    <# Restores whatever AZURE_CONFIG_DIR was before. Always call from a
-       finally block; leaving a program's profile active would hand the next
-       command in the same shell the wrong identity. #>
+    <# Restores whatever AZURE_CONFIG_DIR and AZURE_EXTENSION_DIR were before.
+       Always call from a finally block; leaving a program's profile active
+       would hand the next command in the same shell the wrong identity. #>
     [CmdletBinding()]
     param([Parameter(Mandatory)]$State)
+    if ($State.ExtensionDirChanged) {
+        if ($null -ne $State.PreviousExtensionDir) { $env:AZURE_EXTENSION_DIR = $State.PreviousExtensionDir }
+        else { Remove-Item Env:AZURE_EXTENSION_DIR -ErrorAction SilentlyContinue }
+    }
     if (-not $State.Changed) { return }
     if ($null -ne $State.Previous) { $env:AZURE_CONFIG_DIR = $State.Previous }
     else { Remove-Item Env:AZURE_CONFIG_DIR -ErrorAction SilentlyContinue }
