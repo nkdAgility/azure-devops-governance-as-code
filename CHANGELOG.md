@@ -19,6 +19,13 @@ previously left alone, without a line of consumer code changing.
 
 ### Fixed
 
+- **`. .\init.ps1` now leaves the governance commands in your shell.** The
+  workspace init loads `governance\init.ps1` from inside the automation
+  bootstrap module and then removes that module, which took the governance
+  import and `Invoke-Governance` with it: after init, `Invoke-Governance` and
+  `Test-Governance` were "not recognized". The template now imports with
+  `-Global` and defines `Invoke-Governance` from an unbound script block.
+  `tests/InitTemplate.Tests.ps1` reproduces the load-then-remove sequence.
 - **Authored members no longer read as "unresolvable" when the lookup is
   refused.** User descriptors are resolved through the user entitlements REST
   API instead of `az devops user show`, which needs 'ReadExtended Users' (often
