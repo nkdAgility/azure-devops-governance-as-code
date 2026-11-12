@@ -518,6 +518,34 @@ Grants are additive (minimum bits, merge). Apply never removes an ACE, so it
 does not take write access away from the project's default Contributors group;
 restricting that is a separate, manual decision.
 
+### Curation: who may create tags and area paths
+
+Opt-in, in `access.yaml`. Everyone keeps *using* existing tags and area paths;
+only creating them is restricted.
+
+```yaml
+curation:
+  tags:
+    group: Subsurface-Tag-Curators      # created on the program root
+    # revokeFrom: [Contributors, Build Administrators]   # the default
+  areas:
+    lockCreate: true
+```
+
+- **Tags.** The curator group is created on the program root, with members from
+  `members/<program>.yaml` under `tagCurator:`. Apply grants it Create + Update
+  in the Tagging namespace on the project, and **removes** *Create tag
+  definition* from each group in `revokeFrom`. The bit is cleared, not denied:
+  a deny would also block a curator who is in Contributors.
+- **Area paths.** Creation moves up to product level. Each product's (and the
+  program's) Admins group keeps *create child nodes* over its whole subtree, so
+  that group is the product's area manager. Team-level Admins groups keep read
+  and edit node, and apply removes their *create child nodes*.
+
+This is the only place apply removes a permission. It touches only those named
+bits, keeps every other bit and any deny as found, and shows each one as a
+`revoke` under `-WhatIf`. Audit reports a group that still can create as drift.
+
 ### A team directly on a section
 
 A section normally groups its `items` without creating a team of its own.

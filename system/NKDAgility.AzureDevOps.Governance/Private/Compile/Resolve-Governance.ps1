@@ -566,6 +566,17 @@ function Resolve-Governance {
                 members = (ConvertTo-MemberEntryList -Entries $entries -Today $today -Context "members/$memberKey.yaml role '$($spec.role)'")
             })
         }
+        # The tag curator group (access.yaml curation.tags.group) lives on the
+        # program root, so the ordinary group reconcile creates it and governs
+        # its members from members/<program>.yaml 'tagCurator:'.
+        if ($team.kind -eq 'portfolio' -and $Access.curation -and $Access.curation.tags) {
+            $curatorEntries = if ($memberSet -and $memberSet.ContainsKey('tagCurator')) { $memberSet['tagCurator'] } else { @() }
+            $groups.Add([ordered]@{
+                role    = 'tagCurator'
+                ado     = [string]$Access.curation.tags.group
+                members = (ConvertTo-MemberEntryList -Entries $curatorEntries -Today $today -Context "members/$memberKey.yaml role 'tagCurator'")
+            })
+        }
         $team.securityGroups = $groups
 
         # teamAdmins: governs the ADO Team Administrator role on the team
@@ -644,19 +655,52 @@ function Resolve-Governance {
         })
     }
 
+    # Curation (opt-in, access.yaml curation:). Decision-style locking of who may
+    # CREATE tags and area paths while everyone keeps using existing ones.
+    #   tags.group      the only group allowed to create (and update) tags
+    #   tags.revokeFrom project groups that lose 'Create tag definition'
+    #                   (default: the project's Contributors and Build Administrators)
+    #   areas.lockCreate area creation moves up to product level: a product's
+    #                   (and the program's) Admins group keeps CREATE_CHILDREN over
+    #                   its whole subtree - that group is the product's area
+    #                   manager - and team-level Admins groups lose it
+    $curation = $null
+    if ($Access.curation) {
+        $tagsSpec  = $Access.curation.tags
+        $areasSpec = $Access.curation.areas
+        if ($tagsSpec -and [string]::IsNullOrWhiteSpace([string]$tagsSpec.group)) {
+            throw "access.yaml: curation.tags needs 'group:' - the name of the group allowed to create tags."
+        }
+        $curation = [ordered]@{
+            tags  = if ($tagsSpec) {
+                        [ordered]@{
+                            group      = [string]$tagsSpec.group
+                            revokeFrom = @(if ($tagsSpec.revokeFrom) { $tagsSpec.revokeFrom } else { 'Contributors', 'Build Administrators' })
+                        }
+                    } else { $null }
+            areas = if ($areasSpec) { [ordered]@{ lockCreate = [bool]$areasSpec.lockCreate } } else { $null }
+        }
+    }
+    $lockAreaCreate = [bool]($curation -and $curation.areas -and $curation.areas.lockCreate)
+
     # Structural authority: each {key}-Admins group gets node-management rights
     # over the team's HOME area only (delegated ownership — structural
     # permission, not membership). Sideloaded paths carry ZERO security:
-    # board visibility never grants authority.
+    # board visibility never grants authority. With curation.areas.lockCreate
+    # a TEAM's Admins group drops CREATE_CHILDREN (4) - read + edit node only -
+    # while product and program Admins keep it as the area managers.
     $authority = [System.Collections.Generic.List[object]]::new()
     foreach ($team in $ctx.Teams) {
         if ($team.scope -eq 'future') { continue }
         $adminGroup = @($team.securityGroups | Where-Object { $_.role -eq 'admin' }) | Select-Object -First 1
         if (-not $adminGroup) { continue }
+        $loseCreate = $lockAreaCreate -and $team.kind -eq 'team'
         $authority.Add([ordered]@{
-            group = $adminGroup.ado
-            team  = $team.name
-            paths = @($team.authorityPaths)
+            group        = $adminGroup.ado
+            team         = $team.name
+            paths        = @($team.authorityPaths)
+            bits         = if ($loseCreate) { 3 } else { 7 }
+            revokeCreate = $loseCreate
         })
     }
 
@@ -727,6 +771,7 @@ function Resolve-Governance {
         queryFolders    = $ctx.QueryFolders
         structuralAuthority = $authority
         areaWorkItemAccess  = $areaAccess
+        curation            = $curation
         stakeholders    = [ordered]@{
             accessLevel = $Access.stakeholders.accessLevel
             ado         = $Access.stakeholders.ado

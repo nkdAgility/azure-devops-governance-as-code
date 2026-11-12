@@ -1108,6 +1108,7 @@ function Invoke-GovernanceReconcile {
                 continue
             }
 
+            $needBits = if ($entry.bits) { [int]$entry.bits } else { $script:AreaNodeAdminBits }
             foreach ($path in @($entry.paths)) {
                 if (-not $liveAreas.ContainsKey($path)) { continue }   # area missing — already flagged
                 try {
@@ -1115,29 +1116,117 @@ function Invoke-GovernanceReconcile {
                         $authTokens[$path] = Get-AdoAreaNodeToken -OrgUrl $OrgUrl -Project $project -ResolvedPath $path
                     }
                     $token  = $authTokens[$path]
-                    $acl    = Get-AdoAreaNodeAcl -OrgUrl $OrgUrl -Token $token
-                    $actual = if ($acl.ContainsKey($identityDesc)) { [int]$acl[$identityDesc] } else { 0 }
-                    if (($actual -band $script:AreaNodeAdminBits) -eq $script:AreaNodeAdminBits) {
+                    $aces   = Get-AdoAceSet -OrgUrl $OrgUrl -NamespaceId $script:CssNamespaceId -Token $token
+                    $ace    = if ($aces.ContainsKey($identityDesc)) { $aces[$identityDesc] } else { @{ allow = 0; deny = 0 } }
+                    $actual = $ace.allow
+                    if (($actual -band $needBits) -eq $needBits) {
                         & $rOk "authority: $($entry.group) on $path"
                     } elseif ($doFix) {
                         try {
                             Set-AdoAreaNodeAce -OrgUrl $OrgUrl -Token $token `
-                                -IdentityDescriptor $identityDesc -AllowBits $script:AreaNodeAdminBits
+                                -IdentityDescriptor $identityDesc -AllowBits $needBits
                             & $rFixed "authority: $($entry.group) on $path"
+                            $actual = $actual -bor $needBits
                         } catch {
                             $findings.Add("ERROR granting structural authority to '$($entry.group)' on '$path': $_")
                             & $rError "grant authority '$($entry.group)' on '$path': $_"
                         }
                     } else {
-                        $findings.Add("DRIFT structural authority: '$($entry.group)' lacks node-admin rights on '$path' (allow=$actual, need $script:AreaNodeAdminBits)")
+                        $findings.Add("DRIFT structural authority: '$($entry.group)' lacks node-admin rights on '$path' (allow=$actual, need $needBits)")
                         if ($Mode -eq 'WhatIf') { & $rWould "grant node-admin to $($entry.group) on $path" }
                         else                     { & $rDrift "authority: $($entry.group) on $path" }
+                    }
+
+                    # curation.areas.lockCreate: a team's Admins may not create areas.
+                    if ($entry.revokeCreate -and ($actual -band $script:AreaCreateChildBit)) {
+                        if ($doFix) {
+                            try {
+                                Set-AdoAceExact -OrgUrl $OrgUrl -NamespaceId $script:CssNamespaceId -Token $token `
+                                    -IdentityDescriptor $identityDesc `
+                                    -AllowBits ($actual -band (-bnot $script:AreaCreateChildBit)) -DenyBits $ace.deny
+                                & $rFixed "authority: revoked create-children from $($entry.group) on $path"
+                            } catch {
+                                $findings.Add("ERROR revoking create-children from '$($entry.group)' on '$path': $_")
+                                & $rError "revoke create-children '$($entry.group)' on '$path': $_"
+                            }
+                        } else {
+                            $findings.Add("DRIFT area curation: '$($entry.group)' can create area paths under '$path'")
+                            if ($Mode -eq 'WhatIf') { & $rWould "revoke create-children from $($entry.group) on $path" }
+                            else                     { & $rDrift "area curation: $($entry.group) can create under $path" }
+                        }
                     }
                 } catch {
                     $findings.Add("ERROR reading node ACL for '$path': $_")
                     & $rError "node ACL for '$path': $_"
                 }
             }
+        }
+    }
+
+    # ── 6b2. Tag curation (access.yaml curation.tags) ─────────────────────────
+    # Only the curator group creates tags; the named project groups lose
+    # 'Create tag definition'. Removing the bit, not denying it: a deny would
+    # also block a curator who is a member of Contributors. Everyone keeps
+    # Enumerate, so existing tags stay usable.
+    if ($Resolved.curation -and $Resolved.curation.tags) {
+        Write-Host "`n--- Tag curation ---" -ForegroundColor Cyan
+        try {
+            if (-not $projectId) { $projectId = Get-AdoProjectId -OrgUrl $OrgUrl -Project $project }
+            if (-not $projectId) { throw "could not resolve the project ID" }
+            $tagToken = "/$projectId"
+            $tagAces  = Get-AdoAceSet -OrgUrl $OrgUrl -NamespaceId $script:TaggingNamespaceId -Token $tagToken
+
+            # Curator group: must hold Create + Update.
+            $curatorName = [string]$Resolved.curation.tags.group
+            $curatorSubj = $liveGroups[$curatorName]
+            if (-not $curatorSubj) {
+                $findings.Add("MISSING tag curator group '$curatorName' — created by the groups step; re-run")
+                & $rMissing "tag curator group: $curatorName"
+            } else {
+                $curatorId = Get-AdoGroupIdentityDescriptor -OrgUrl $OrgUrl -SubjectDescriptor $curatorSubj
+                if (-not $curatorId) { throw "cannot resolve the security identity of '$curatorName'" }
+                $have = if ($tagAces.ContainsKey($curatorId)) { $tagAces[$curatorId].allow } else { 0 }
+                if (($have -band $script:TagCuratorBits) -eq $script:TagCuratorBits) {
+                    & $rOk "tag curation: $curatorName can create tags"
+                } elseif ($doFix) {
+                    Set-AdoAccessControlEntry -OrgUrl $OrgUrl -NamespaceId $script:TaggingNamespaceId -Body @{
+                        token = $tagToken; merge = $true
+                        accessControlEntries = @(@{ descriptor = $curatorId; allow = $script:TagCuratorBits; deny = 0 })
+                    }
+                    & $rFixed "tag curation: $curatorName can create tags"
+                } else {
+                    $findings.Add("DRIFT tag curation: '$curatorName' cannot create tags")
+                    if ($Mode -eq 'WhatIf') { & $rWould "grant tag create to $curatorName" }
+                    else                     { & $rDrift "tag curation: $curatorName cannot create tags" }
+                }
+            }
+
+            # Everyone else named: must NOT hold Create.
+            foreach ($name in @($Resolved.curation.tags.revokeFrom)) {
+                $subj = $liveGroups[[string]$name]
+                if (-not $subj) {
+                    $findings.Add("ERROR tag curation: project group '$name' not found")
+                    & $rError "tag curation: project group '$name' not found"
+                    continue
+                }
+                $idDesc = Get-AdoGroupIdentityDescriptor -OrgUrl $OrgUrl -SubjectDescriptor $subj
+                if (-not $idDesc) { throw "cannot resolve the security identity of '$name'" }
+                $ace = if ($tagAces.ContainsKey($idDesc)) { $tagAces[$idDesc] } else { @{ allow = 0; deny = 0 } }
+                if (-not ($ace.allow -band $script:TagCreateBit)) {
+                    & $rOk "tag curation: $name cannot create tags"
+                } elseif ($doFix) {
+                    Set-AdoAceExact -OrgUrl $OrgUrl -NamespaceId $script:TaggingNamespaceId -Token $tagToken `
+                        -IdentityDescriptor $idDesc -AllowBits ($ace.allow -band (-bnot $script:TagCreateBit)) -DenyBits $ace.deny
+                    & $rFixed "tag curation: revoked tag create from $name"
+                } else {
+                    $findings.Add("DRIFT tag curation: '$name' can create tags")
+                    if ($Mode -eq 'WhatIf') { & $rWould "revoke tag create from $name" }
+                    else                     { & $rDrift "tag curation: $name can create tags" }
+                }
+            }
+        } catch {
+            $findings.Add("ERROR tag curation: $_")
+            & $rError "tag curation: $_"
         }
     }
 

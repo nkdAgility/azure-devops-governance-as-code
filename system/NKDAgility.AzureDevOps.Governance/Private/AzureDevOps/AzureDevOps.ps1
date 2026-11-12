@@ -1391,6 +1391,61 @@ function Set-AdoAreaNodeAce {
     Set-AdoAccessControlEntry -OrgUrl $OrgUrl -NamespaceId $script:CssNamespaceId -Body $body
 }
 
+# ─── Curation: revoking specific bits (tag and area-path creation) ────────────
+# Everything else in this module only ever ADDS bits. Curation is the one place
+# that removes them, so it is narrow: named bits, named identities, named
+# tokens, and an explicit allow/deny write that keeps every other bit as found.
+
+# Tagging namespace, as slb-swt reports it (read 2026-11-12): Enumerate 1,
+# Create 2, Update 4, Delete 8.
+$script:TaggingNamespaceId = 'bb50f182-8e5e-40b8-bc21-e8752a1e7ae2'
+$script:TagCreateBit       = 2
+$script:TagCuratorBits     = 6    # Create(2) + Update(4)
+$script:AreaCreateChildBit = 4    # CSS CREATE_CHILDREN
+
+function Get-AdoAceSet {
+    <# Explicit ACEs on one token: securityIdentityDescriptor -> @{ allow; deny }.
+       Throws on failure: a revoke decided on an unread ACL would be a guess. #>
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)][string]$OrgUrl,
+        [Parameter(Mandatory)][string]$NamespaceId,
+        [Parameter(Mandatory)][string]$Token
+    )
+    $tokenEnc = [Uri]::EscapeDataString($Token)
+    $result = Invoke-AdoRest -OrgUrl $OrgUrl `
+        -Path "_apis/accesscontrollists/$NamespaceId`?token=$tokenEnc&includeExtendedInfo=false&recurse=false"
+    $set = @{}
+    foreach ($list in @($result.value)) {
+        foreach ($prop in $list.acesDictionary.PSObject.Properties) {
+            $set[$prop.Name] = @{ allow = [int]$prop.Value.allow; deny = [int]$prop.Value.deny }
+        }
+    }
+    return $set
+}
+
+function Set-AdoAceExact {
+    <# Writes one identity's ACE on a token exactly (merge=false): the given
+       allow and deny replace what was there. Used only to clear named bits. #>
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)][string]$OrgUrl,
+        [Parameter(Mandatory)][string]$NamespaceId,
+        [Parameter(Mandatory)][string]$Token,
+        [Parameter(Mandatory)][string]$IdentityDescriptor,
+        [Parameter(Mandatory)][int]$AllowBits,
+        [Parameter(Mandatory)][int]$DenyBits
+    )
+    $body = @{
+        token = $Token
+        merge = $false
+        accessControlEntries = @(
+            @{ descriptor = $IdentityDescriptor; allow = $AllowBits; deny = $DenyBits }
+        )
+    }
+    Set-AdoAccessControlEntry -OrgUrl $OrgUrl -NamespaceId $NamespaceId -Body $body
+}
+
 # NOTE (spike pending): making the admin group a Team Administrator of the
 # teams under its node has no cleanly documented REST API (candidates: Identity
 # namespace ACE on the team identity, or the legacy AddTeamAdmins endpoint).

@@ -302,6 +302,48 @@ Describe 'Compile stage' {
         }
     }
 
+    It 'leaves curation off and admin bits at 7 without a curation block' {
+        $script:resolved.curation | Should -BeNullOrEmpty
+        @($script:resolved.structuralAuthority | Where-Object { $_.bits -ne 7 }).Count | Should -Be 0
+    }
+
+    It 'puts the tag curator group on the program root and moves area creation to product level' {
+        InModuleScope NKDAgility.AzureDevOps.Governance {
+            $section = @{ name = 'Engineering'; type = 'delivery'; short = 'ENG' }
+            $result = Resolve-Governance -Manifest @{ program = 'Demo'; org = 'demo-org' } `
+                -Source @{ products = @(@{ name = 'Portal'; short = 'PRT'; sections = @($section) }) } `
+                -Access @{ teamGroups = @(@{ role = 'admin'; ado = '{key}-Admins' });
+                           containerGroups = @(@{ role = 'admin'; ado = '{key}-Admins' });
+                           roles = @{};
+                           curation = @{ tags = @{ group = 'Demo-Tag-Curators' }; areas = @{ lockCreate = $true } };
+                           stakeholders = @{ accessLevel = 'stakeholder'; ado = 'Demo-Stakeholders'; scope = 'org' } } `
+                -Members @{ Demo = @{ tagCurator = @(@{ upn = 'curator@example.com'; reason = 'Tag curator' }) }; PRT = @{}; 'PRT-ENG' = @{} } `
+                -SourceHash 'testhash'
+
+            $root = $result.teams | Where-Object name -eq 'Demo'
+            $cur  = $root.securityGroups | Where-Object role -eq 'tagCurator'
+            $cur.ado               | Should -Be 'Demo-Tag-Curators'
+            $cur.members[0].upn    | Should -Be 'curator@example.com'
+            $result.curation.tags.revokeFrom | Should -Be @('Contributors', 'Build Administrators')
+
+            $team    = $result.structuralAuthority | Where-Object group -eq 'PRT-ENG-Admins'
+            $product = $result.structuralAuthority | Where-Object group -eq 'PRT-Admins'
+            $team.bits            | Should -Be 3
+            $team.revokeCreate    | Should -BeTrue
+            $product.bits         | Should -Be 7
+            $product.revokeCreate | Should -BeFalse
+        }
+    }
+
+    It 'rejects curation.tags without a group' {
+        InModuleScope NKDAgility.AzureDevOps.Governance {
+            { Resolve-Governance -Manifest @{ program = 'Demo'; org = 'demo' } -Source @{ products = @(@{ name = 'P'; short = 'P' }) } `
+                -Access @{ teamGroups = @(); containerGroups = @(); roles = @{}; curation = @{ tags = @{} };
+                           stakeholders = @{ accessLevel = 'stakeholder'; ado = 'D-S'; scope = 'org' } } `
+                -SourceHash 'x' } | Should -Throw '*curation.tags needs*'
+        }
+    }
+
     It 'exposes a members collection on each group (reconciliation target)' {
         $root = $script:resolved.teams | Where-Object name -eq 'Odyssey'
         ($root.securityGroups | Where-Object role -eq 'reader').Keys | Should -Contain 'members'
