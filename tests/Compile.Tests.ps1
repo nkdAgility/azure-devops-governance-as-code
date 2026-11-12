@@ -344,6 +344,35 @@ Describe 'Compile stage' {
         }
     }
 
+    It 'keeps write permissions when writeAccess is not declared' {
+        $script:resolved.writeAccess | Should -BeTrue
+        ($script:resolved.pipelineFolders | Where-Object path -eq '\Portal\Platform\Foundation').acl |
+            Where-Object group -eq 'PTL-FND-Contributors' | ForEach-Object { $_.permission | Should -Be 'Edit, Queue' }
+    }
+
+    It 'downgrades every governed grant to read with writeAccess: false' {
+        InModuleScope NKDAgility.AzureDevOps.Governance {
+            $section = @{ name = 'Engineering'; type = 'delivery'; short = 'ENG'; pipelineFolder = $true; queryFolder = $true; repos = @(@{ name = 'Tools'; innerOSS = $true }) }
+            $result = Resolve-Governance -Manifest @{ program = 'Demo'; org = 'demo-org' } `
+                -Source @{ products = @(@{ name = 'Portal'; short = 'PRT'; sections = @($section) }) } `
+                -Access @{ teamGroups = @(@{ role = 'contributor'; ado = '{key}-Contributors' });
+                           containerGroups = @();
+                           roles = @{ contributor = @{ boards = 'contribute'; pipelines = 'Edit, Queue'; queries = 'contribute' } };
+                           workItemAccess = @{ grantAt = 'team' };
+                           writeAccess = $false;
+                           stakeholders = @{ accessLevel = 'stakeholder'; ado = 'Demo-Stakeholders'; scope = 'org' } } `
+                -SourceHash 'testhash'
+
+            $result.writeAccess | Should -BeFalse
+            (@($result.pipelineFolders)[0].acl | Where-Object group -eq 'PRT-ENG-Contributors').permission | Should -Be 'read'
+            (@($result.queryFolders)[0].acl    | Where-Object group -eq 'PRT-ENG-Contributors').permission | Should -Be 'read'
+            (@($result.areaWorkItemAccess)     | Where-Object group -eq 'PRT-ENG-Contributors').permission | Should -Be 'read'
+            $repo = $result.repos | Where-Object name -eq 'PRT-ENG-Tools'
+            ($repo.acl | Where-Object principal -eq 'PRT-ENG-Contributors').permission | Should -Be 'read'
+            @($repo.acl | Where-Object permission -eq 'innersource').Count | Should -Be 0
+        }
+    }
+
     It 'exposes a members collection on each group (reconciliation target)' {
         $root = $script:resolved.teams | Where-Object name -eq 'Odyssey'
         ($root.securityGroups | Where-Object role -eq 'reader').Keys | Should -Contain 'members'

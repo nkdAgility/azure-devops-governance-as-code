@@ -586,6 +586,13 @@ function Resolve-Governance {
         $team.teamAdmins = (ConvertTo-MemberEntryList -Entries $adminEntries -Today $today -Context "members/$memberKey.yaml teamAdmins")
     }
 
+    # access.yaml writeAccess (default true). false = read-only rollout: every
+    # permission governance grants on repos, pipeline folders, query folders and
+    # work items is downgraded to read, and reconcile removes write bits already
+    # granted, so members can be added and reads validated before anyone can
+    # change anything. Structural authority and tag curation are unaffected.
+    $writeAccess = if ($null -eq $Access.writeAccess) { $true } else { [bool]$Access.writeAccess }
+
     # Repo ACLs: everyone in the project reads; only the owning team's
     # contributor group writes; innerOSS additionally opens branch creation and
     # PR contribution to everyone (fork/PR flow without direct push).
@@ -603,9 +610,9 @@ function Resolve-Governance {
         $acl = [System.Collections.Generic.List[object]]::new()
         $acl.Add([ordered]@{ principal = 'project-valid-users'; permission = 'read' })
         if ($writeGroup.Count -gt 0) {
-            $acl.Add([ordered]@{ principal = $writeGroup[0].ado; permission = 'write' })
+            $acl.Add([ordered]@{ principal = $writeGroup[0].ado; permission = $(if ($writeAccess) { 'write' } else { 'read' }) })
         }
-        if ($repo.innerOSS) {
+        if ($repo.innerOSS -and $writeAccess) {
             $acl.Add([ordered]@{ principal = 'project-valid-users'; permission = 'innersource' })
         }
         $repo.acl = $acl
@@ -622,6 +629,7 @@ function Resolve-Governance {
             $roleDef = $Access.roles[[string]$group.role]
             $permission = if ($roleDef) { $roleDef.pipelines } else { $null }
             if (-not $permission) { continue }
+            if (-not $writeAccess) { $permission = 'read' }
             $acl.Add([ordered]@{ group = $group.ado; permission = $permission })
         }
         $ctx.PipelineFolders.Add([ordered]@{
@@ -646,6 +654,7 @@ function Resolve-Governance {
             if ([string]$permission -notin $script:QueryFolderPermissionNames) {
                 throw "access.yaml: role '$($group.role)' has unknown queries permission '$permission' (expected one of: $($script:QueryFolderPermissionNames -join ', '))."
             }
+            if (-not $writeAccess) { $permission = 'read' }
             $acl.Add([ordered]@{ group = $group.ado; permission = [string]$permission })
         }
         $ctx.QueryFolders.Add([ordered]@{
@@ -739,7 +748,7 @@ function Resolve-Governance {
                 $seenGrant[$grantKey] = $true
                 $areaAccess.Add([ordered]@{
                     group      = $group.ado
-                    permission = [string]$permission
+                    permission = $(if ($writeAccess) { [string]$permission } else { 'read' })
                     path       = $grantPath
                     team       = $team.name
                 })
@@ -771,6 +780,7 @@ function Resolve-Governance {
         structuralAuthority = $authority
         areaWorkItemAccess  = $areaAccess
         curation            = $curation
+        writeAccess         = $writeAccess
         stakeholders    = [ordered]@{
             accessLevel = $Access.stakeholders.accessLevel
             ado         = $Access.stakeholders.ado

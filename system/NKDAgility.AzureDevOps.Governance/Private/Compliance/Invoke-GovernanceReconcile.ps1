@@ -53,6 +53,37 @@ function Invoke-GovernanceReconcile {
     $rOrphan  = { param($m) Write-Host "  [AUDIT EXCEPTION] $m  (exists in ADO but not in config)" -ForegroundColor Magenta }
     $rError   = { param($m) Write-Host "  [ERROR]   $m" -ForegroundColor Red }
 
+    # Read-only rollout (access.yaml writeAccess: false). The compiler already
+    # downgraded every desired permission to read; this removes write bits a
+    # governed group still holds from an earlier apply. Only the namespace's
+    # write bits (-RevokeMask) are touched - never read, never other bits on the
+    # same ACE (a product Admins group also holds structural authority on its
+    # node), and any deny is kept.
+    $writeOff = ($null -ne $Resolved.writeAccess) -and (-not [bool]$Resolved.writeAccess)
+    $revokeWrite = {
+        param([string]$NamespaceId, [string]$Token, [string]$IdentityDesc, [int]$RevokeMask, [string]$Label)
+        $aces = Get-AdoAceSet -OrgUrl $OrgUrl -NamespaceId $NamespaceId -Token $Token
+        if (-not $aces.ContainsKey($IdentityDesc)) { return }
+        $ace   = $aces[$IdentityDesc]
+        $extra = $ace.allow -band $RevokeMask
+        if ($extra -eq 0) { return }
+        if ($doFix) {
+            try {
+                Set-AdoAceExact -OrgUrl $OrgUrl -NamespaceId $NamespaceId -Token $Token -IdentityDescriptor $IdentityDesc `
+                    -AllowBits ($ace.allow -band (-bnot $RevokeMask)) -DenyBits $ace.deny
+                & $rFixed "read-only: revoked write from $Label"
+            } catch {
+                $findings.Add("ERROR revoking write from ${Label}: $_")
+                & $rError "revoke write from ${Label}: $_"
+            }
+        } else {
+            $findings.Add("DRIFT read-only: $Label still holds write (bits $extra)")
+            if ($Mode -eq 'WhatIf') { & $rWould "revoke write from $Label" }
+            else                     { & $rDrift "read-only: $Label still holds write" }
+        }
+    }
+    if ($writeOff) { Write-Host "`n==> Read-only rollout (writeAccess: false): governance grants read only and revokes write it granted earlier." -ForegroundColor Yellow }
+
     # ── 1. Area paths ─────────────────────────────────────────────────────────
     Write-Host "`n--- Area paths ---" -ForegroundColor Cyan
 
@@ -544,6 +575,11 @@ function Invoke-GovernanceReconcile {
                 }
                 $desiredBits = ConvertTo-RepoPermissionBit -Permission $ace.permission
                 $actualBits  = if ($liveAcl.ContainsKey($identityDesc)) { [int]$liveAcl[$identityDesc] } else { 0 }
+                if ($writeOff) {
+                    & $revokeWrite $script:GitRepoNamespaceId "repoV2/$projectId/$($liveRepos[$repo.name])" $identityDesc `
+                        ((ConvertTo-RepoPermissionBit -Permission 'write') -band (-bnot (ConvertTo-RepoPermissionBit -Permission 'read'))) `
+                        "$groupName on repo $($repo.name)"
+                }
                 if (($actualBits -band $desiredBits) -ne $desiredBits) {
                     $aclDrift.Add([ordered]@{
                         message      = "DRIFT repo '$($repo.name)': '$groupName' ($($ace.permission)) has allow=$actualBits, need bits $desiredBits"
@@ -654,6 +690,12 @@ function Invoke-GovernanceReconcile {
 
                 $desiredBits = ConvertTo-PipelinePermissionBit -Permission $ace.permission
                 $actualBits  = if ($liveAcl.ContainsKey($identityDesc)) { [int]$liveAcl[$identityDesc] } else { 0 }
+                if ($writeOff) {
+                    $cleanPath = $folder.path.TrimStart('\').Replace('\', '/')
+                    & $revokeWrite $script:PipelineBuildNamespaceId $(if ($cleanPath) { "$projectId/$cleanPath" } else { $projectId }) $identityDesc `
+                        ((ConvertTo-PipelinePermissionBit -Permission 'Edit, Queue') -band (-bnot (ConvertTo-PipelinePermissionBit -Permission 'read'))) `
+                        "$($ace.group) on pipeline folder $($folder.path)"
+                }
                 if (($actualBits -band $desiredBits) -ne $desiredBits) {
                     $aclDrift.Add([ordered]@{
                         message      = "DRIFT pipeline folder '$($folder.path)': '$($ace.group)' has allow=$actualBits, need bits $desiredBits"
@@ -775,6 +817,11 @@ function Invoke-GovernanceReconcile {
 
                 $desiredBits = ConvertTo-QueryFolderPermissionBit -Permission $ace.permission
                 $actualBits  = if ($liveAcl.ContainsKey($identityDesc)) { [int]$liveAcl[$identityDesc] } else { 0 }
+                if ($writeOff) {
+                    & $revokeWrite $script:QueryFolderNamespaceId $qfToken $identityDesc `
+                        ((ConvertTo-QueryFolderPermissionBit -Permission 'manage') -band (-bnot (ConvertTo-QueryFolderPermissionBit -Permission 'read'))) `
+                        "$($ace.group) on query folder $($qf.path)"
+                }
                 if (($actualBits -band $desiredBits) -ne $desiredBits) {
                     $aclDrift.Add([ordered]@{
                         message      = "DRIFT query folder '$($qf.path)': '$($ace.group)' has allow=$actualBits, need bits $desiredBits"
@@ -1264,6 +1311,12 @@ function Invoke-GovernanceReconcile {
                 $token  = $wiTokens[$path]
                 $acl    = Get-AdoAreaNodeAcl -OrgUrl $OrgUrl -Token $token
                 $actual = if ($acl.ContainsKey($identityDesc)) { [int]$acl[$identityDesc] } else { 0 }
+                if ($writeOff) {
+                    # Work item write bits only; GENERIC_WRITE/CREATE_CHILDREN belong to structural authority.
+                    & $revokeWrite $script:CssNamespaceId $token $identityDesc `
+                        ((ConvertTo-AreaWorkItemPermissionBit -Permission 'contribute') -band (-bnot (ConvertTo-AreaWorkItemPermissionBit -Permission 'read'))) `
+                        "$($entry.group) on work items in $path"
+                }
                 if (($actual -band $need) -eq $need) {
                     & $rOk "work items: $($entry.group) $($entry.permission) on $path"
                 } elseif ($doFix) {

@@ -518,6 +518,24 @@ Grants are additive (minimum bits, merge). Apply never removes an ACE, so it
 does not take write access away from the project's default Contributors group;
 restricting that is a separate, manual decision.
 
+### Read-only rollout: `writeAccess: false`
+
+```yaml
+writeAccess: false   # in access.yaml; omit or true for normal write access
+```
+
+Every permission governance grants is downgraded to read: work items on area
+paths, pipeline folders, shared query folders and the owning team's repos
+(innerOSS is dropped). Apply also **removes the write bits it granted earlier**,
+so a person added to a group cannot write. Fill `members/`, check what people
+can see, then set `writeAccess: true` and apply.
+
+Only each area's write bits are removed (work item edit, test plans and suites
+and comments; pipeline edit and queue; query contribute and manage; repo
+contribute, branch, tag and PR), never read, never other bits on the same ACE,
+and any deny is kept. Structural authority and tag curation are not affected,
+and the project's default groups are not governed, so they are not touched.
+
 ### Curation: who may create tags and area paths
 
 Opt-in, in `access.yaml`. Everyone keeps *using* existing tags and area paths;

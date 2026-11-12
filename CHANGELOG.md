@@ -17,6 +17,15 @@ previously left alone, without a line of consumer code changing.
 
 ## [Unreleased]
 
+### Added (read-only rollout)
+
+- **`access.yaml writeAccess: false`** downgrades every governed grant (work
+  items on area paths, pipeline folders, query folders, owning-team repos) to
+  read and removes the write bits an earlier apply granted, so members can be
+  added and reads validated before anyone can change anything. Only each
+  namespace's write bits are removed; read, structural authority, tag curation
+  and any deny are kept. Default `true`: no change for programs that omit it.
+
 ### Added (curation)
 
 - **Curation of tag and area-path creation**, opt-in through `access.yaml
