@@ -307,7 +307,7 @@ Describe 'Compile stage' {
         @($script:resolved.structuralAuthority | Where-Object { $_.bits -ne 7 }).Count | Should -Be 0
     }
 
-    It 'puts the tag curator group on the program root and moves area creation to product level' {
+    It 'puts the tag curator group on the program root and takes area creation from every Admins group' {
         InModuleScope NKDAgility.AzureDevOps.Governance {
             $section = @{ name = 'Engineering'; type = 'delivery'; short = 'ENG' }
             $result = Resolve-Governance -Manifest @{ program = 'Demo'; org = 'demo-org' } `
@@ -330,8 +330,8 @@ Describe 'Compile stage' {
             $product = $result.structuralAuthority | Where-Object group -eq 'PRT-Admins'
             $team.bits            | Should -Be 3
             $team.revokeCreate    | Should -BeTrue
-            $product.bits         | Should -Be 7
-            $product.revokeCreate | Should -BeFalse
+            $product.bits         | Should -Be 3
+            $product.revokeCreate | Should -BeTrue
         }
     }
 

@@ -537,10 +537,10 @@ curation:
   in the Tagging namespace on the project, and **removes** *Create tag
   definition* from each group in `revokeFrom`. The bit is cleared, not denied:
   a deny would also block a curator who is in Contributors.
-- **Area paths.** Creation moves up to product level. Each product's (and the
-  program's) Admins group keeps *create child nodes* over its whole subtree, so
-  that group is the product's area manager. Team-level Admins groups keep read
-  and edit node, and apply removes their *create child nodes*.
+- **Area paths.** Config only. Every area path is a node in `hierarchy.yaml`
+  and apply creates it, so no Admins group needs to create one in ADO: all of
+  them keep read and edit node, and apply removes their *create child nodes*. A
+  new area path is a change to `hierarchy.yaml`.
 
 This is the only place apply removes a permission. It touches only those named
 bits, keeps every other bit and any deny as found, and shows each one as a

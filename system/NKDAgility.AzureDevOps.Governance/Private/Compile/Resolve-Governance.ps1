@@ -660,10 +660,9 @@ function Resolve-Governance {
     #   tags.group      the only group allowed to create (and update) tags
     #   tags.revokeFrom project groups that lose 'Create tag definition'
     #                   (default: the project's Contributors and Build Administrators)
-    #   areas.lockCreate area creation moves up to product level: a product's
-    #                   (and the program's) Admins group keeps CREATE_CHILDREN over
-    #                   its whole subtree - that group is the product's area
-    #                   manager - and team-level Admins groups lose it
+    #   areas.lockCreate no Admins group creates area paths in ADO: every area
+    #                   path comes from hierarchy.yaml and apply creates it. All
+    #                   Admins groups keep read + edit node and lose CREATE_CHILDREN.
     $curation = $null
     if ($Access.curation) {
         $tagsSpec  = $Access.curation.tags
@@ -687,14 +686,14 @@ function Resolve-Governance {
     # over the team's HOME area only (delegated ownership — structural
     # permission, not membership). Sideloaded paths carry ZERO security:
     # board visibility never grants authority. With curation.areas.lockCreate
-    # a TEAM's Admins group drops CREATE_CHILDREN (4) - read + edit node only -
-    # while product and program Admins keep it as the area managers.
+    # every Admins group drops CREATE_CHILDREN (4) - read + edit node only - so
+    # a new area path can only arrive through hierarchy.yaml.
     $authority = [System.Collections.Generic.List[object]]::new()
     foreach ($team in $ctx.Teams) {
         if ($team.scope -eq 'future') { continue }
         $adminGroup = @($team.securityGroups | Where-Object { $_.role -eq 'admin' }) | Select-Object -First 1
         if (-not $adminGroup) { continue }
-        $loseCreate = $lockAreaCreate -and $team.kind -eq 'team'
+        $loseCreate = $lockAreaCreate
         $authority.Add([ordered]@{
             group        = $adminGroup.ado
             team         = $team.name

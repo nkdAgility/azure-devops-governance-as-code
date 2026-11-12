@@ -23,8 +23,8 @@ previously left alone, without a line of consumer code changing.
   curation:`. `tags.group` names the only group that may create tags (created
   on the program root, members under `tagCurator:`); apply removes *Create tag
   definition* from the project's Contributors and Build Administrators.
-  `areas.lockCreate` keeps *create child nodes* with product and program Admins
-  (each product's area manager) and removes it from team-level Admins. First
+  `areas.lockCreate` removes *create child nodes* from every Admins group, so
+  area paths come only from `hierarchy.yaml`. First
   place apply revokes a permission: named bits only, deny and other bits kept,
   shown as `revoke` under `-WhatIf`.
 
